@@ -13,7 +13,7 @@ from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
 from s3storage import client as s3client
-from s3storage import migrate, overrides, storage
+from s3storage import migrate, overrides, storage, verify
 from s3storage.serve import PublicFilePage
 from s3storage.tests.fake_s3 import FakeS3
 
@@ -350,6 +350,158 @@ class TestMigration(S3FilesTestCase):
 	def test_inactive_migration_does_nothing(self):
 		with patch.dict(frappe.local.conf, UNSET):
 			self.assertFalse(migrate.run(dry_run=True)["active"])
+
+
+class TestVerify(S3FilesTestCase):
+	def test_reports_missing_objects_and_mismatches(self):
+		ok = make_file(f"{self.tag}-ok.txt", b"ok")
+		gone = make_file(f"{self.tag}-gone.txt", b"gone")
+		self.s3.delete_object(Bucket="files", Key=storage.key_for(gone.file_url))
+		resized = make_file(f"{self.tag}-size.txt", b"size")
+		frappe.db.set_value("File", resized.name, "file_size", 999)
+		changed = make_file(f"{self.tag}-hash.txt", b"hash")
+		self.s3.objects[("files", storage.key_for(changed.file_url))]["Body"] = b"HASH"
+		with patch.dict(frappe.local.conf, UNSET):
+			local = make_file(f"{self.tag}-local.txt", b"local")
+		self.addCleanup(os.remove, local.get_full_path())
+
+		result = verify.run()
+		self.assertGreaterEqual(result["counts"]["ok"], 1)
+		self.assertGreaterEqual(result["counts"]["local_only"], 1)
+		self.assertIn(f"missing: {gone.file_url}", result["problems"])
+		self.assertIn(f"size_mismatch: {resized.file_url}", result["problems"])
+		self.assertIn(f"hash_mismatch: {changed.file_url}", result["problems"])
+		self.assertFalse([p for p in result["problems"] if p.endswith((ok.file_url, local.file_url))])
+
+	def test_is_read_only(self):
+		make_file(f"{self.tag}.txt", self.tag.encode())
+		self.s3.put_object(Bucket="files", Key=f"public/files/{self.tag}-orphan.txt", Body=b"x")
+		self.s3.calls.clear()
+		verify.run()
+		self.assertLessEqual(set(self.s3.calls), {"head_object", "get_object", "list_objects_v2"})
+		self.assertFalse(os.path.exists(storage.local_path(f"/files/{self.tag}-orphan.txt")))
+
+	def test_lists_orphans_across_pages(self):
+		file = make_file(f"{self.tag}.png", png())
+		file.make_thumbnail()
+		orphans = [f"public/files/{self.tag}-orphan.txt", f"private/files/{self.tag}-orphan.txt"]
+		for key in [*orphans, f"archive/{self.tag}.txt"]:
+			self.s3.put_object(Bucket="files", Key=key, Body=b"orphan")
+		self.s3.page_size = 1
+
+		result = verify.run()
+		self.assertEqual(sorted(result["orphans"]["keys"]), sorted(orphans))
+		self.assertEqual(result["orphans"]["count"], 2)
+		self.assertEqual(result["orphans"]["bytes"], 12)
+		self.assertEqual(result["counts"]["orphan"], 2)
+
+	def test_sample_limits_hashing(self):
+		for suffix in "abc":
+			file = make_file(f"{self.tag}-{suffix}.txt", suffix.encode())
+		self.s3.objects[("files", storage.key_for(file.file_url))]["Body"] = b"C"
+		self.s3.calls.clear()
+
+		result = verify.run(sample=0)
+		self.assertNotIn("hashed", result["counts"])
+		self.assertNotIn("get_object", self.s3.calls)
+		self.assertNotIn(f"hash_mismatch: {file.file_url}", result["problems"])
+
+		result = verify.run()
+		self.assertGreaterEqual(result["counts"]["hashed"], 3)
+		self.assertIn(f"hash_mismatch: {file.file_url}", result["problems"])
+
+	def test_inactive_verify_does_nothing(self):
+		with patch.dict(frappe.local.conf, UNSET):
+			self.assertFalse(verify.run()["active"])
+
+
+class TestMigrationToLocal(S3FilesTestCase):
+	def local(self, file_url):
+		path = storage.local_path(file_url)
+		self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+		return path
+
+	def test_dry_run_then_download_is_idempotent_and_keeps_rows_and_objects(self):
+		file = make_file(f"{self.tag}.txt", self.tag.encode())
+		row = frappe.db.get_value("File", file.name, ["file_url", "is_private", "content_hash"], as_dict=True)
+		path = self.local(file.file_url)
+		self.assertFalse(os.path.exists(path))
+
+		result = migrate.run(dry_run=True, to_local=True)
+		self.assertEqual(result["direction"], "to_local")
+		self.assertGreaterEqual(result["counts"]["would_download"], 1)
+		self.assertFalse(os.path.exists(path))
+
+		result = migrate.run(to_local=True)
+		self.assertGreaterEqual(result["counts"]["downloaded"], 1)
+		with open(path, "rb") as f:
+			self.assertEqual(f.read(), self.tag.encode())
+		self.assertFalse(os.path.exists(path + migrate.PART_SUFFIX))
+		self.assertIn(storage.key_for(file.file_url), self.s3.keys())
+
+		result = migrate.run(to_local=True)
+		self.assertNotIn("downloaded", result["counts"])
+		self.assertGreaterEqual(result["counts"]["already_local"], 1)
+
+		with patch.dict(frappe.local.conf, UNSET):
+			doc = frappe.get_doc("File", file.name)
+			self.assertTrue(os.path.samefile(doc.get_full_path(), path))
+			self.assertEqual(doc.get_content(), self.tag)
+		self.assertEqual(
+			frappe.db.get_value("File", file.name, ["file_url", "is_private", "content_hash"], as_dict=True),
+			row,
+		)
+
+	def test_private_files_and_thumbnails_land_where_frappe_reads_them(self):
+		private = make_file(f"{self.tag}.csv", b"a,1", is_private=1)
+		image = make_file(f"{self.tag}.png", png())
+		thumbnail_url = image.make_thumbnail()
+		paths = [self.local(url) for url in (private.file_url, image.file_url, thumbnail_url)]
+
+		migrate.run(to_local=True)
+		self.assertTrue(all(os.path.isfile(path) for path in paths))
+		self.assertIn(os.path.join("private", "files"), paths[0])
+		with patch.dict(frappe.local.conf, UNSET):
+			self.assertTrue(frappe.get_doc("File", private.name).exists_on_disk())
+			self.assertTrue(frappe.get_doc("File", image.name).exists_on_disk())
+
+	def test_differing_local_file_is_reported_not_overwritten(self):
+		file = make_file(f"{self.tag}.txt", b"remote")
+		path = self.local(file.file_url)
+		with open(path, "wb") as f:
+			f.write(b"stale")
+
+		result = migrate.run(to_local=True)
+		self.assertIn(f"local_differs: {file.file_url}", result["problems"])
+		with open(path, "rb") as f:
+			self.assertEqual(f.read(), b"stale")
+
+	def test_failed_download_leaves_no_partial_file_and_resumes(self):
+		file = make_file(f"{self.tag}.txt", b"remote")
+		path = self.local(file.file_url)
+
+		def broken(key, out=None):
+			out.write(b"rem")
+			raise ConnectionError("dropped")
+
+		with patch.object(storage, "stream", side_effect=broken), patch.object(frappe, "log_error"):
+			result = migrate.run(to_local=True)
+		self.assertIn(f"failed: {file.file_url}", result["problems"])
+		self.assertFalse(os.path.exists(path))
+		self.assertFalse(os.path.exists(path + migrate.PART_SUFFIX))
+
+		self.assertGreaterEqual(migrate.run(to_local=True)["counts"]["downloaded"], 1)
+		with open(path, "rb") as f:
+			self.assertEqual(f.read(), b"remote")
+
+	def test_download_not_matching_object_metadata_is_discarded(self):
+		file = make_file(f"{self.tag}.txt", b"remote")
+		path = self.local(file.file_url)
+		self.s3.objects[("files", storage.key_for(file.file_url))]["Metadata"]["md5"] = "0" * 32
+
+		result = migrate.run(to_local=True)
+		self.assertIn(f"verify_failed: {file.file_url}", result["problems"])
+		self.assertFalse(os.path.exists(path))
 
 
 class DeleteRefused(frappe.ValidationError):

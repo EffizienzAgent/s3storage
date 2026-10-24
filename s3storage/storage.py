@@ -10,6 +10,7 @@ from s3storage.client import FILES, client_for, target_config
 URL_PREFIXES = {"/private/files/": "private/files/", "/files/": "public/files/"}
 MISSING_CODES = {"404", "NoSuchKey", "NotFound"}
 UNSAFE_CHARS = re.compile(r"[%?#\\\x00-\x1f\x7f]")
+CHUNK_SIZE = 1024 * 1024
 
 
 class UnsafeFileURL(frappe.ValidationError):
@@ -74,6 +75,18 @@ def md5(content):
 	return hashlib.md5(content, usedforsecurity=False).hexdigest()
 
 
+def local_digest(path):
+	if not path or not os.path.isfile(path):
+		return None
+	digest = hashlib.md5(usedforsecurity=False)
+	size = 0
+	with open(path, "rb") as f:
+		while chunk := f.read(CHUNK_SIZE):
+			digest.update(chunk)
+			size += len(chunk)
+	return size, digest.hexdigest()
+
+
 def content_type_for(name):
 	return mimetypes.guess_type(name)[0] or "application/octet-stream"
 
@@ -115,6 +128,32 @@ def open_object(key):
 		if _missing(e):
 			return None
 		raise
+
+
+def stream(key, out=None):
+	obj = open_object(key)
+	if obj is None:
+		return None
+	digest = hashlib.md5(usedforsecurity=False)
+	size = 0
+	body = obj["Body"]
+	with body:
+		for chunk in body.iter_chunks(CHUNK_SIZE):
+			digest.update(chunk)
+			size += len(chunk)
+			if out is not None:
+				out.write(chunk)
+	return size, digest.hexdigest()
+
+
+def list_objects(prefix):
+	kwargs = {"Bucket": bucket(), "Prefix": prefix}
+	while True:
+		page = client().list_objects_v2(**kwargs)
+		yield from page.get("Contents", [])
+		if not page.get("IsTruncated"):
+			return
+		kwargs["ContinuationToken"] = page["NextContinuationToken"]
 
 
 def get(key):

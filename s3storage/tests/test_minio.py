@@ -11,7 +11,7 @@ import frappe.utils.response as response
 from frappe.tests import IntegrationTestCase
 
 from s3storage import client as s3client
-from s3storage import migrate, overrides, storage
+from s3storage import migrate, overrides, storage, verify
 from s3storage.tests.test_s3storage import DeleteRefused, body, make_file
 
 ENDPOINT = os.environ.get("S3STORAGE_TEST_ENDPOINT")
@@ -83,6 +83,23 @@ class TestMinio(MinioTestCase):
 		self.assertGreaterEqual(migrate.run()["counts"]["uploaded"], 1)
 		self.assertEqual(storage.get(storage.key_for(file.file_url)), self.tag.encode())
 		self.assertNotIn("uploaded", migrate.run()["counts"])
+
+	def test_verify_and_migrate_to_local(self):
+		file = make_file(f"{self.tag}.txt", self.tag.encode())
+		orphan = f"public/files/{self.tag}-orphan.txt"
+		self.s3.put_object(Bucket=self.bucket, Key=orphan, Body=b"orphan")
+
+		result = verify.run()
+		self.assertIn(orphan, result["orphans"]["keys"])
+		self.assertFalse([p for p in result["problems"] if p.endswith(file.file_url)])
+
+		path = storage.local_path(file.file_url)
+		self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+		with patch.object(migrate, "file_urls", return_value=[(file.file_url, file.content_hash)]):
+			self.assertEqual(migrate.run(to_local=True)["counts"], {"downloaded": 1})
+			self.assertEqual(migrate.run(to_local=True)["counts"], {"already_local": 1})
+		with open(path, "rb") as f:
+			self.assertEqual(f.read(), self.tag.encode())
 
 	def test_client_factory_supports_object_lock_uploads(self):
 		client, settings = s3client.get_client()
