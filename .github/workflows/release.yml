@@ -38,5 +38,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.sha }}
+          fetch-depth: 0
       - name: Fast-forward the stable branch to the release
         run: git push origin "HEAD:refs/heads/$STABLE_BRANCH"
