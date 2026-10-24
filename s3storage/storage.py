@@ -136,7 +136,8 @@ def stream(key, out=None):
 		return None
 	digest = hashlib.md5(usedforsecurity=False)
 	size = 0
-	with obj["Body"] as body:
+	body = obj["Body"]
+	with body:
 		for chunk in body.iter_chunks(CHUNK_SIZE):
 			digest.update(chunk)
 			size += len(chunk)

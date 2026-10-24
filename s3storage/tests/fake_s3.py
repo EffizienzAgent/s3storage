@@ -10,6 +10,10 @@ class FakeClientError(Exception):
 
 
 class FakeBody(io.BytesIO):
+	def __enter__(self):
+		# Like botocore's StreamingBody: the context manager yields the raw stream.
+		return io.BytesIO(self.getvalue())
+
 	def iter_chunks(self, chunk_size=1024):
 		while chunk := self.read(chunk_size):
 			yield chunk
