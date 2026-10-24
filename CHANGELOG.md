@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/EffizienzAgent/s3storage/compare/v0.1.0...v0.2.0) (2026-10-24)
+
+
+### Features
+
+* `s3storage-verify`: read-only check of every File's object (exists, size, content hash; `--sample N`) and report of orphan objects ([#3](https://github.com/EffizienzAgent/s3storage/pull/3)) ([dffdb30](https://github.com/EffizienzAgent/s3storage/commit/dffdb3070264cbdfcf725dd541f1ba5a0f8458c6))
+* `s3storage-migrate --to-local`: idempotent, resumable reverse migration from the bucket to local disk ([#3](https://github.com/EffizienzAgent/s3storage/pull/3)) ([dffdb30](https://github.com/EffizienzAgent/s3storage/commit/dffdb3070264cbdfcf725dd541f1ba5a0f8458c6))
+
 ## 0.1.0 (2026-10-24)
 
 
