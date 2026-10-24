@@ -62,9 +62,9 @@ Other apps can reuse the S3 connection and protect files from deletion. See
 - The Chrome PDF generator reads only local files.
 - Files are streamed through the Frappe workers. That suits office documents and images, not large media.
 
-## Need help?
+## Professional setup & support
 
-If you want this set up and run for you, see [mittelstandshub.de](https://mittelstandshub.de).
+Need help setting this up or integrating it into your Frappe stack? Write to oss@effizienzagent.de (English or German). German-speaking SMEs: see [mittelstandshub.de](https://mittelstandshub.de).
 
 ## License
 

@@ -1,7 +1,7 @@
 [project]
 name = "s3storage"
 authors = [
-    { name = "EffizienzAgent", email = "info@effizienzagent.de"}
+    { name = "EffizienzAgent", email = "oss@effizienzagent.de"}
 ]
 description = "S3-compatible file storage for the Frappe Framework"
 requires-python = ">=3.14"

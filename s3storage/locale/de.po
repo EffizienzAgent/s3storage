@@ -5,7 +5,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: S3 Storage 0.1.0\n"
-"Report-Msgid-Bugs-To: info@effizienzagent.de\n"
+"Report-Msgid-Bugs-To: oss@effizienzagent.de\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"

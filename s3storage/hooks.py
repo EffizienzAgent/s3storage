@@ -2,7 +2,7 @@ app_name = "s3storage"
 app_title = "S3 Storage"
 app_publisher = "EffizienzAgent"
 app_description = "S3-compatible file storage for the Frappe Framework"
-app_email = "info@effizienzagent.de"
+app_email = "oss@effizienzagent.de"
 app_license = "mit"
 
 before_request = ["s3storage.overrides.apply"]
