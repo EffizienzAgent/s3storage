@@ -94,6 +94,11 @@ s3storage_before_object_write = ["myapp.guards.before_object_write"]
 def before_object_delete(file_url=None, *, key=None):
 	if is_archived_url(file_url):
 		frappe.throw(_("Archived files cannot be deleted"))
+
+
+def before_object_write(file_url=None, *, key=None):
+	if is_archived_url(file_url):
+		frappe.throw(_("Archived files cannot be changed"))
 ```
 
 Each function is called as `fn(file_url=..., key=...)`, with the `file_url` (for example

@@ -49,6 +49,16 @@ def png(color="red"):
 	return buffer.getvalue()
 
 
+def pdf():
+	from pypdf import PdfWriter
+
+	writer = PdfWriter()
+	writer.add_blank_page(width=200, height=200)
+	buffer = io.BytesIO()
+	writer.write(buffer)
+	return buffer.getvalue()
+
+
 def unique_png():
 	return png(f"#{uuid.uuid4().hex[:6]}")
 
@@ -651,6 +661,15 @@ class TestInlineServing(S3FilesTestCase):
 		self.assertTrue(resp.headers["Content-Disposition"].startswith("inline"))
 		self.assertEqual(resp.mimetype, "image/png")
 		self.assertEqual(resp.headers["Content-Security-Policy"], "sandbox; default-src 'none'")
+
+	def test_pdf_is_inline_without_csp_so_browsers_render_it(self):
+		for is_private in (0, 1):
+			file = make_file(f"{self.tag}-{is_private}.pdf", pdf(), is_private=is_private)
+			resp = self.render(file)
+			self.assertEqual(resp.mimetype, "application/pdf")
+			self.assertTrue(resp.headers["Content-Disposition"].startswith("inline"))
+			self.assertEqual(resp.headers["X-Content-Type-Options"], "nosniff")
+			self.assertNotIn("Content-Security-Policy", resp.headers)
 
 	def test_html_is_inline_in_a_script_sandbox_without_same_origin(self):
 		page = b"<html><body><script>document.write(6*7)</script></body></html>"

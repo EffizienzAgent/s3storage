@@ -13,7 +13,7 @@ Cloudflare R2 and others that support path-style addressing.
   stays private.
 - **Public files** are streamed from the bucket with ETag and cache headers.
 - **Safe serving.** Only images, PDF, plain text, audio and video open inline; HTML runs in a script sandbox
-  without access to the site; everything else downloads. Every response is sandboxed with a CSP.
+  without access to the site; everything else downloads. Every response except PDF is sandboxed with a CSP.
 - **Safe keys.** A `file_url` with `%`, `?`, `#`, a backslash or a control character is rejected instead of
   mapped, so a double-encoded URL can never reach another file's object.
 - **Dedupe.** Files with the same content share one object, which is deleted with the last `File` row.

@@ -12,7 +12,7 @@ PRIVATE_CACHE = "private, max-age=3600, stale-while-revalidate=86400"
 CHUNK_SIZE = 64 * 1024
 
 
-INLINE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "text/plain"}
+INLINE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "text/plain"}
 INLINE_PREFIXES = ("audio/", "video/")
 HTML_EXTENSIONS = (".html", ".htm")
 STRICT_CSP = "sandbox; default-src 'none'"
@@ -28,6 +28,8 @@ def presentation(file_url):
 	if str(file_url).lower().endswith(HTML_EXTENSIONS) and html_inline():
 		return "text/html", "inline", HTML_CSP
 	content_type = storage.content_type_for(file_url)
+	if content_type == "application/pdf":
+		return content_type, "inline", None
 	if content_type in INLINE_TYPES or content_type.startswith(INLINE_PREFIXES):
 		return content_type, "inline", STRICT_CSP
 	return "application/octet-stream", "attachment", STRICT_CSP
@@ -35,13 +37,15 @@ def presentation(file_url):
 
 def file_headers(file_url, filename, cache_control):
 	content_type, disposition, csp = presentation(file_url)
-	return {
+	headers = {
 		"Content-Type": content_type,
 		"Cache-Control": cache_control,
 		"X-Content-Type-Options": "nosniff",
-		"Content-Security-Policy": csp,
 		"Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(filename)}",
 	}
+	if csp:
+		headers["Content-Security-Policy"] = csp
+	return headers
 
 
 def apply_headers(response, file_url, filename, cache_control):
