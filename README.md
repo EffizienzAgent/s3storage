@@ -18,6 +18,9 @@ Cloudflare R2 and others that support path-style addressing.
   Name collisions get a content-hash suffix.
 - **Gradual migration.** Every read falls back to the local file, so you can turn the app on first and
   upload the existing files later with `bench --site <site> s3storage-migrate`.
+- **Verify and go back.** `s3storage-verify` checks every object's existence, size and hash and lists
+  orphans, read-only. `s3storage-migrate --to-local` moves the files back to local disk.
+  See [docs/migration.md](docs/migration.md).
 - **Off by default.** Until all config keys are set, Frappe keeps using local disk.
 
 Also covered: thumbnails, `optimize_file`, making a file private or public, unzip, rollback, inline email

@@ -16,9 +16,10 @@ class FakeBody(io.BytesIO):
 
 
 class FakeS3:
-	def __init__(self):
+	def __init__(self, page_size=1000):
 		self.objects = {}
 		self.calls = []
+		self.page_size = page_size
 
 	def _object(self, Bucket, Key, missing="NoSuchKey"):
 		try:
@@ -66,3 +67,13 @@ class FakeS3:
 	def copy_object(self, Bucket, Key, CopySource):
 		self.calls.append("copy_object")
 		self.objects[(Bucket, Key)] = dict(self._object(CopySource["Bucket"], CopySource["Key"]))
+
+	def list_objects_v2(self, Bucket, Prefix="", ContinuationToken=None):
+		self.calls.append("list_objects_v2")
+		keys = [key for key in self.keys(Bucket) if key.startswith(Prefix)]
+		start = int(ContinuationToken or 0)
+		page = keys[start : start + self.page_size]
+		result = {"Contents": [{"Key": key, "Size": len(self.content(key, Bucket))} for key in page]}
+		if start + self.page_size < len(keys):
+			result |= {"IsTruncated": True, "NextContinuationToken": str(start + self.page_size)}
+		return result
