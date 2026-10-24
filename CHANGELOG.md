@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/EffizienzAgent/s3storage/compare/v0.1.0...v0.2.0) (2026-10-24)
+
+
+### Features
+
+* s3storage-verify and s3storage-migrate --to-local ([b1efc3d](https://github.com/EffizienzAgent/s3storage/commit/b1efc3d296c2a7cbb2994be1e450e1ac57e85af6))
+* s3storage-verify and s3storage-migrate --to-local ([dffdb30](https://github.com/EffizienzAgent/s3storage/commit/dffdb3070264cbdfcf725dd541f1ba5a0f8458c6))
+
+
+### Bug Fixes
+
+* stream objects via StreamingBody, not its context value ([674e11e](https://github.com/EffizienzAgent/s3storage/commit/674e11eb46cc1ef4d3902a8d45fe277a69764fc1))
+
 ## 0.1.0 (2026-10-24)
 
 
