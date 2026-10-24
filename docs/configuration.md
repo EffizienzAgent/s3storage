@@ -1,0 +1,71 @@
+# Configuration
+
+All settings live in the site config (`sites/<site>/site_config.json`), not in a DocType. Secrets stay out of
+the database and can be written by your deployment, for example from a Kubernetes Secret.
+
+## File storage
+
+| Key | Example | Meaning |
+|---|---|---|
+| `s3_files_endpoint` | `https://s3.example.com` | S3 API endpoint |
+| `s3_files_region` | `eu-central-1` | Region name sent with each request |
+| `s3_files_bucket` | `my-frappe-files` | Bucket for the site's files |
+| `s3_files_access_key` | | Access key |
+| `s3_files_secret_key` | | Secret key |
+
+The app is active only when **all five** keys are set. If one is missing, Frappe keeps using local disk, so
+the order of deploying the app and setting the keys does not matter.
+
+The client uses path-style addressing, three retries, a 5 s connect timeout and a 30 s read timeout.
+Checksums are only sent when an operation requires them, which keeps it compatible with Ceph RGW.
+
+The bucket should be private. The app never needs public-read access.
+
+### Example: Hetzner Object Storage
+
+```json
+{
+ "s3_files_endpoint": "https://fsn1.your-objectstorage.com",
+ "s3_files_region": "fsn1",
+ "s3_files_bucket": "my-frappe-files",
+ "s3_files_access_key": "...",
+ "s3_files_secret_key": "..."
+}
+```
+
+### Example: MinIO
+
+```json
+{
+ "s3_files_endpoint": "http://minio:9000",
+ "s3_files_region": "us-east-1",
+ "s3_files_bucket": "frappe-files",
+ "s3_files_access_key": "...",
+ "s3_files_secret_key": "..."
+}
+```
+
+## Named targets
+
+Other apps can use more buckets through named targets (see [extending.md](extending.md)). A target named
+`<name>` reads the keys `s3_<name>_endpoint`, `s3_<name>_region`, `s3_<name>_bucket`, `s3_<name>_access_key`
+and `s3_<name>_secret_key`. The file storage itself is the target `files`.
+
+If a target sets neither `s3_<name>_access_key` nor `s3_<name>_secret_key`, it uses the credentials of the
+`files` target. Target names may contain lowercase letters, digits and underscores.
+
+## Object keys
+
+| `file_url` | Object key |
+|---|---|
+| `/files/report.pdf` | `public/files/report.pdf` |
+| `/private/files/contract.pdf` | `private/files/contract.pdf` |
+
+The key is the stored `file_url` path as is. It is never URL-decoded. A `file_url` that contains `%`, `?`,
+`#`, a backslash or a control character is rejected (`UnsafeFileURL`): uploads fail, downloads return 403 and
+the migration reports it as `unsafe_url`.
+
+## Web server
+
+With the standard Frappe nginx config, nginx serves files that still exist on local disk and passes a miss
+on to Frappe, which then streams the object from the bucket. No nginx change is needed.
