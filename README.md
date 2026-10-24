@@ -12,6 +12,8 @@ Cloudflare R2 and others that support path-style addressing.
   check and access log, then streams from the bucket. Browsers never get a presigned URL, so the bucket
   stays private.
 - **Public files** are streamed from the bucket with ETag and cache headers.
+- **Safe serving.** Only images, PDF, plain text, audio and video open inline; HTML runs in a script sandbox
+  without access to the site; everything else downloads. Every response is sandboxed with a CSP.
 - **Safe keys.** A `file_url` with `%`, `?`, `#`, a backslash or a control character is rejected instead of
   mapped, so a double-encoded URL can never reach another file's object.
 - **Dedupe.** Files with the same content share one object, which is deleted with the last `File` row.
@@ -60,7 +62,7 @@ Other apps can reuse the S3 connection and protect files from deletion. See
 [docs/extending.md](docs/extending.md):
 
 - `s3storage.client.get_client(target)` returns a boto3 client and bucket config for a named target.
-- The hook `s3storage_before_file_delete` runs before a `File`'s bytes are deleted and may refuse.
+- The hooks `s3storage_before_file_delete` and `s3storage_before_object_change` run before bytes are deleted or overwritten, from whichever `File` row, and may refuse.
 
 ## Limits
 

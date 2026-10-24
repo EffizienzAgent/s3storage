@@ -75,4 +75,22 @@ Each function gets the `File` document. They run at the start of `File.on_trash`
 deleted from the bucket or the local disk, also while the S3 storage is not configured. Raising an exception
 cancels the delete: the `File` row and its bytes stay.
 
-The hook does not run for other ways bytes change, such as making a file private or rolling back a new upload.
+The hook also runs before an object is changed by any other row, so a host app can protect an object no
+matter which `File` row triggers the change:
+
+- before an object is deleted or overwritten (`delete_file_data_content`, `save_file(overwrite=True)`,
+  `optimize_file`, regenerating a thumbnail), for every `File` whose `file_url` or `thumbnail_url` is that object;
+- before a file is made private or public, for the file itself and every `File` that shares its URL or
+  `content_hash`.
+
+An object that other rows still use is never deleted: a private/public change then copies it. The hook does
+not run when a new upload is rolled back.
+
+## Watching object changes
+
+`s3storage_before_object_change` gets `(file_url, action, file)` before an object is deleted or overwritten.
+`action` is `"delete"` or `"overwrite"`, and `file` is the `File` that triggered it. Raise to refuse.
+
+```python
+s3storage_before_object_change = ["myapp.guards.before_object_change"]
+```

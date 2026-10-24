@@ -1,4 +1,5 @@
 import os
+import tempfile
 from collections import Counter
 
 import frappe
@@ -89,9 +90,10 @@ def download_one(file_url, content_hash, dry_run):
 		return ["would_download"]
 
 	os.makedirs(os.path.dirname(path), exist_ok=True)
-	part = path + PART_SUFFIX
+	fd, part = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".", suffix=PART_SUFFIX)
 	try:
-		with open(part, "wb") as out:
+		os.chmod(part, 0o644)
+		with os.fdopen(fd, "wb") as out:
 			streamed = storage.stream(key, out)
 		if streamed is None:
 			return ["missing"]

@@ -39,3 +39,11 @@ msgstr "Dateiformat für {0} kann nicht geschrieben werden"
 #: s3storage/serve.py:103 s3storage/serve.py:108 s3storage/serve.py:111
 msgid "You don't have permission to access this file"
 msgstr "Sie haben keine Berechtigung, auf diese Datei zuzugreifen"
+
+#: s3storage/file.py:52
+msgid "Field {0} of a file cannot be changed"
+msgstr "Feld {0} einer Datei kann nicht geändert werden"
+
+#: s3storage/file.py:63
+msgid "You do not have permission to access this file"
+msgstr "Sie haben keine Berechtigung, auf diese Datei zuzugreifen"

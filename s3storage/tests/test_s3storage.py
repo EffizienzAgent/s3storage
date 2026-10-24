@@ -41,12 +41,16 @@ def make_user(email):
 	return email
 
 
-def png():
+def png(color="red"):
 	from PIL import Image
 
 	buffer = io.BytesIO()
-	Image.new("RGB", (640, 480), "red").save(buffer, format="PNG")
+	Image.new("RGB", (640, 480), color).save(buffer, format="PNG")
 	return buffer.getvalue()
+
+
+def unique_png():
+	return png(f"#{uuid.uuid4().hex[:6]}")
 
 
 def body(resp):
@@ -252,7 +256,7 @@ class TestServing(S3FilesTestCase):
 		resp = response.download_private_file(file.file_url)
 		self.assertEqual(body(resp), b"secret,1")
 		self.assertIn("private", resp.headers["Cache-Control"])
-		self.assertEqual(resp.mimetype, "text/csv")
+		self.assertEqual(resp.mimetype, "application/octet-stream")
 
 		frappe.set_user(other)
 		self.assertRaises(Forbidden, response.download_private_file, file.file_url)
@@ -436,7 +440,7 @@ class TestMigrationToLocal(S3FilesTestCase):
 		self.assertGreaterEqual(result["counts"]["downloaded"], 1)
 		with open(path, "rb") as f:
 			self.assertEqual(f.read(), self.tag.encode())
-		self.assertFalse(os.path.exists(path + migrate.PART_SUFFIX))
+		self.assertFalse([n for n in os.listdir(os.path.dirname(path)) if n.endswith(migrate.PART_SUFFIX)])
 		self.assertIn(storage.key_for(file.file_url), self.s3.keys())
 
 		result = migrate.run(to_local=True)
@@ -488,7 +492,7 @@ class TestMigrationToLocal(S3FilesTestCase):
 			result = migrate.run(to_local=True)
 		self.assertIn(f"failed: {file.file_url}", result["problems"])
 		self.assertFalse(os.path.exists(path))
-		self.assertFalse(os.path.exists(path + migrate.PART_SUFFIX))
+		self.assertFalse([n for n in os.listdir(os.path.dirname(path)) if n.endswith(migrate.PART_SUFFIX)])
 
 		self.assertGreaterEqual(migrate.run(to_local=True)["counts"]["downloaded"], 1)
 		with open(path, "rb") as f:
@@ -596,3 +600,226 @@ class TestClientFactory(IntegrationTestCase):
 		self.assertIs(s3client.get_client(config=explicit)[0], other)
 		with self.assertRaises(s3client.NotConfigured):
 			s3client.get_client(config={"endpoint": "https://other.example.com"})
+
+
+def refuse_protected(file):
+	if file.name in (frappe.flags.s3storage_protected or ()):
+		raise DeleteRefused(f"{file.name} is protected")
+
+
+def record_object_change(file_url, action, file):
+	frappe.flags.s3storage_changes.append((file_url, action, file.name if file else None))
+
+
+class TestInlineServing(S3FilesTestCase):
+	def render(self, file):
+		self.request(file.file_url)
+		if file.is_private:
+			return response.download_private_file(file.file_url)
+		return PublicFilePage(file.file_url).render()
+
+	def assert_download_only(self, resp):
+		self.assertTrue(resp.headers["Content-Disposition"].startswith("attachment"))
+		self.assertEqual(resp.mimetype, "application/octet-stream")
+		self.assertEqual(resp.headers["Content-Security-Policy"], "sandbox; default-src 'none'")
+		self.assertEqual(resp.headers["X-Content-Type-Options"], "nosniff")
+
+	def test_script_capable_types_are_download_only(self):
+		payload = b"<x:script xmlns:x='http://www.w3.org/1999/xhtml'>alert(1)</x:script>"
+		for ext in ("xpdl", "rdf", "wsdl", "xml", "svg", "xhtml", "js"):
+			for is_private in (0, 1):
+				file = make_file(f"{self.tag}-{is_private}.{ext}", payload, is_private=is_private)
+				self.assert_download_only(self.render(file))
+
+	def test_type_comes_from_file_url_not_file_name(self):
+		file = make_file(f"{self.tag}.rdf", b"<rdf/>", is_private=1)
+		frappe.db.set_value("File", file.name, "file_name", f"{self.tag}.png")
+		resp = self.render(frappe.get_doc("File", file.name))
+		self.assert_download_only(resp)
+
+	def test_allowlisted_types_are_inline_and_sandboxed(self):
+		file = make_file(f"{self.tag}.png", png())
+		resp = self.render(file)
+		self.assertTrue(resp.headers["Content-Disposition"].startswith("inline"))
+		self.assertEqual(resp.mimetype, "image/png")
+		self.assertEqual(resp.headers["Content-Security-Policy"], "sandbox; default-src 'none'")
+
+	def test_html_is_inline_in_a_script_sandbox_without_same_origin(self):
+		page = b"<html><body><script>document.write(6*7)</script></body></html>"
+		file = make_file(f"{self.tag}.html", page, is_private=1)
+		resp = self.render(file)
+		self.assertEqual(resp.status_code, 200)
+		self.assertEqual(body(resp), page)
+		self.assertEqual(resp.mimetype, "text/html")
+		self.assertTrue(resp.headers["Content-Disposition"].startswith("inline"))
+		csp = resp.headers["Content-Security-Policy"]
+		self.assertTrue(csp.startswith("sandbox allow-scripts"))
+		self.assertNotIn("allow-same-origin", csp)
+
+	def test_html_inline_can_be_turned_off(self):
+		file = make_file(f"{self.tag}.htm", b"<p>x</p>", is_private=1)
+		with patch.dict(frappe.local.conf, {"s3storage_html_inline": 0}):
+			resp = self.render(file)
+		self.assert_download_only(resp)
+		self.assertEqual(body(resp), b"<p>x</p>")
+
+	def test_local_fallback_gets_the_same_headers(self):
+		with patch.dict(frappe.local.conf, UNSET):
+			private = make_file(f"{self.tag}.rdf", b"<rdf/>", is_private=1)
+			public = make_file(f"{self.tag}.wsdl", b"<wsdl/>")
+		for file in (private, public):
+			self.addCleanup(os.remove, file.get_full_path())
+			resp = self.render(file)
+			resp.direct_passthrough = False
+			self.assert_download_only(resp)
+
+
+class TestPrivateFileAccess(S3FilesTestCase):
+	def setUp(self):
+		super().setUp()
+		self.victim = make_user(f"{self.tag}-victim@example.com")
+		self.attacker = make_user(f"{self.tag}-attacker@example.com")
+		frappe.set_user(self.victim)
+		self.secret = make_file(f"{self.tag}-secret.txt", b"victim secret", is_private=1)
+		frappe.set_user(self.attacker)
+
+	def case_variant_row(self, content):
+		own = make_file(f"{self.tag}-own.txt", content, is_private=1)
+		variant = self.secret.file_url.replace("secret", "SECRET")
+		frappe.db.set_value("File", own.name, "file_url", variant)
+		self.s3.put_object(Bucket="files", Key=storage.key_for(variant), Body=content)
+		return variant
+
+	def test_case_variant_row_does_not_open_other_users_file(self):
+		variant = self.case_variant_row(b"mine")
+		self.request(self.secret.file_url)
+		self.assertRaises(Forbidden, response.download_private_file, self.secret.file_url)
+		self.request(variant)
+		self.assertEqual(body(response.download_private_file(variant)), b"mine")
+
+	def test_owner_cannot_repoint_protected_fields(self):
+		own = make_file(f"{self.tag}-own.txt", b"mine", is_private=1)
+		for field, value in (
+			("file_url", self.secret.file_url),
+			("thumbnail_url", self.secret.file_url),
+			("content_hash", self.secret.content_hash),
+		):
+			doc = frappe.get_doc("File", own.name)
+			doc.set(field, value)
+			with self.assertRaises(frappe.PermissionError, msg=field):
+				doc.save()
+		self.assertEqual(frappe.db.get_value("File", own.name, "file_url"), own.file_url)
+
+	def test_new_row_cannot_point_at_unreadable_object(self):
+		self.case_variant_row(b"mine")
+		doc = frappe.get_doc({"doctype": "File", "file_url": self.secret.file_url, "is_private": 1})
+		with self.assertRaises(frappe.PermissionError):
+			doc.insert()
+
+	def test_making_public_cannot_move_other_users_object(self):
+		own = make_file(f"{self.tag}-own.txt", b"mine", is_private=1)
+		doc = frappe.get_doc("File", own.name)
+		doc.file_url = self.secret.file_url
+		doc.is_private = 0
+		with self.assertRaises(frappe.PermissionError):
+			doc.save()
+		self.assertEqual(self.s3.content(storage.key_for(self.secret.file_url)), b"victim secret")
+		self.assertNotIn(f"public/files/{self.tag}-secret.txt", self.s3.keys())
+
+	def test_making_public_refuses_an_exact_existing_target(self):
+		frappe.set_user("Administrator")
+		public = make_file(f"{self.tag}-taken.txt", b"public one")
+		private = make_file(f"{self.tag}-taken.txt", b"private one", is_private=1)
+		self.assertEqual(private.file_url, f"/private/files/{self.tag}-taken.txt")
+		private.is_private = 0
+		with self.assertRaises(FileExistsError):
+			private.save()
+		self.assertEqual(self.s3.content(storage.key_for(public.file_url)), b"public one")
+
+
+class TestSharedObjects(S3FilesTestCase):
+	def setUp(self):
+		super().setUp()
+		self.content = unique_png()
+		self.protected = make_file(f"{self.tag}.png", self.content)
+		frappe.flags.s3storage_protected = {self.protected.name}
+		frappe.flags.s3storage_changes = []
+		self.addCleanup(frappe.flags.pop, "s3storage_protected", None)
+		self.addCleanup(frappe.flags.pop, "s3storage_changes", None)
+		self.key = storage.key_for(self.protected.file_url)
+		self.enterContext(
+			self.patch_hooks(
+				{
+					"s3storage_before_file_delete": [f"{__name__}.refuse_protected"],
+					"s3storage_before_object_change": [f"{__name__}.record_object_change"],
+				}
+			)
+		)
+
+	def other_row(self, **fields):
+		other = make_file(f"{self.tag}-other.txt", self.tag.encode())
+		frappe.db.set_value("File", other.name, fields)
+		return frappe.get_doc("File", other.name)
+
+	def test_row_whose_thumbnail_is_the_object_cannot_delete_it(self):
+		other = self.other_row(thumbnail_url=self.protected.file_url)
+		other.delete()
+		self.assertIn(self.key, self.s3.keys())
+
+	def test_row_whose_file_url_is_the_object_cannot_delete_it(self):
+		other = self.other_row(file_url=self.protected.file_url, content_hash="unique")
+		other.delete()
+		self.assertIn(self.key, self.s3.keys())
+
+	def test_making_a_sharing_row_private_is_refused_by_the_hook(self):
+		copy = make_file(f"{self.tag}-copy.png", self.content)
+		self.assertEqual(copy.file_url, self.protected.file_url)
+		copy.is_private = 1
+		with self.assertRaises(DeleteRefused):
+			copy.save()
+		self.assertIn(self.key, self.s3.keys())
+
+	def test_making_a_sharing_row_private_copies_without_deleting(self):
+		frappe.flags.s3storage_protected = set()
+		copy = make_file(f"{self.tag}-copy.png", self.content)
+		copy.is_private = 1
+		copy.save()
+		self.assertIn(self.key, self.s3.keys())
+		self.assertIn(storage.key_for(copy.file_url), self.s3.keys())
+		self.assertEqual(
+			frappe.db.get_value("File", self.protected.name, "file_url"), self.protected.file_url
+		)
+
+	def test_overwrite_of_protected_object_is_refused(self):
+		before = self.s3.content(self.key)
+		with self.assertRaises(DeleteRefused):
+			frappe.get_doc("File", self.protected.name).save_file(content=unique_png(), overwrite=True)
+		self.assertEqual(self.s3.content(self.key), before)
+
+	def test_object_change_hook_sees_deletes(self):
+		frappe.flags.s3storage_protected = set()
+		self.protected.delete()
+		self.assertIn(
+			(self.protected.file_url, "delete", self.protected.name), frappe.flags.s3storage_changes
+		)
+
+
+class TestThumbnails(S3FilesTestCase):
+	def test_making_private_moves_the_thumbnail(self):
+		file = make_file(f"{self.tag}.png", png())
+		file.make_thumbnail()
+		file = frappe.get_doc("File", file.name)
+		file.is_private = 1
+		file.save()
+		self.assertEqual(file.thumbnail_url, f"/private/files/{self.tag}_small.png")
+		self.assertIn(f"private/files/{self.tag}_small.png", self.s3.keys())
+		self.assertNotIn(f"public/files/{self.tag}_small.png", self.s3.keys())
+
+	def test_thumbnail_does_not_overwrite_another_object(self):
+		taken = f"public/files/{self.tag}_small.png"
+		self.s3.put_object(Bucket="files", Key=taken, Body=b"someone else")
+		file = make_file(f"{self.tag}.png", png())
+		thumbnail_url = file.make_thumbnail()
+		self.assertNotEqual(thumbnail_url, f"/files/{self.tag}_small.png")
+		self.assertEqual(self.s3.content(taken), b"someone else")
+		self.assertIn(storage.key_for(thumbnail_url), self.s3.keys())

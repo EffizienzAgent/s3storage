@@ -133,7 +133,7 @@ already look exactly as they would on a site that never used S3.
 6. `bench --site <site> set-maintenance-mode off` and `bench --site <site> enable-scheduler`.
 7. Keep the bucket until you are sure. The command never deletes objects.
 
-The command is idempotent and can be resumed. A file is first written to `<name>.s3storage-part` and only
+The command is idempotent and can be resumed. A file is first written to a unique `.<name>…s3storage-part` temp file in the same folder and only
 renamed to its final name after its size and MD5 match the object, so an interrupted run leaves no half
 file behind. Files that already exist with the same size and MD5 are skipped.
 
