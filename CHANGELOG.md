@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.1](https://github.com/EffizienzAgent/s3storage/compare/v0.2.0...v0.2.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **serve:** the response type comes from `file_url` only; every response sends `nosniff`, inline types get a strict sandbox CSP (PDFs inline without CSP so browsers render them), everything else downloads as an attachment ([#6](https://github.com/EffizienzAgent/s3storage/pull/6)) ([e8df9de](https://github.com/EffizienzAgent/s3storage/commit/e8df9de9856767ceef4cb3702c13440b68308a63), [27d94c1](https://github.com/EffizienzAgent/s3storage/commit/27d94c1569e5d1c2081ec44c16441f2b74229bed))
+* **private files:** downloads require a `File` whose `file_url` equals the request path; saves cannot change `file_url`, `thumbnail_url` or `content_hash` ([#6](https://github.com/EffizienzAgent/s3storage/pull/6)) ([e8df9de](https://github.com/EffizienzAgent/s3storage/commit/e8df9de9856767ceef4cb3702c13440b68308a63))
+* **shared objects:** making a file private or public copies a shared object instead of deleting it; the new hooks `s3storage_before_object_delete` and `s3storage_before_object_write` run before every object delete or overwrite ([#6](https://github.com/EffizienzAgent/s3storage/pull/6)) ([e8df9de](https://github.com/EffizienzAgent/s3storage/commit/e8df9de9856767ceef4cb3702c13440b68308a63), [343604b](https://github.com/EffizienzAgent/s3storage/commit/343604bf081c16e7513ac468e8c3fe7b2740d1ef))
+* **migrate:** `--to-local` writes a unique temp file per download ([#6](https://github.com/EffizienzAgent/s3storage/pull/6)) ([e8df9de](https://github.com/EffizienzAgent/s3storage/commit/e8df9de9856767ceef4cb3702c13440b68308a63))
+
 ## [0.2.0](https://github.com/EffizienzAgent/s3storage/compare/v0.1.0...v0.2.0) (2026-10-24)
 
 
