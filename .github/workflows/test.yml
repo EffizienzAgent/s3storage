@@ -2,8 +2,9 @@ name: test
 
 on:
   push:
-    branches: [main]
+    branches: [main, version-16]
   pull_request:
+    branches: [main, version-16]
     paths-ignore:
       - '*.md'
       - 'docs/**'

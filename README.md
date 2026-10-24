@@ -23,14 +23,17 @@ Cloudflare R2 and others that support path-style addressing.
 Also covered: thumbnails, `optimize_file`, making a file private or public, unzip, rollback, inline email
 images and Typst PDFs.
 
-## Install
+## Installation
 
-```sh
-bench get-app https://github.com/EffizienzAgent/s3storage
+```bash
+bench get-app https://github.com/EffizienzAgent/s3storage --branch version-16
 bench --site <site> install-app s3storage
 ```
 
-Requires Frappe v16. `boto3` is installed as a Python dependency.
+**Compatibility:** Frappe v16. The `version-16` branch always points to the latest release; tagged releases
+and the changelog are on the [releases page](https://github.com/EffizienzAgent/s3storage/releases).
+
+`boto3` is installed as a Python dependency.
 
 ## Configure
 
