@@ -16,13 +16,15 @@ client, config = get_client("archive")
 client.put_object(Bucket=config.bucket, Key="a.pdf", Body=b"...")
 
 # An explicit config, for example from a DocType
-client, config = get_client(config={
-	"endpoint": "https://s3.example.com",
-	"region": "eu-central-1",
-	"bucket": "other-bucket",
-	"access_key": "...",
-	"secret_key": "...",
-})
+client, config = get_client(
+	config={
+		"endpoint": "https://s3.example.com",
+		"region": "eu-central-1",
+		"bucket": "other-bucket",
+		"access_key": "...",
+		"secret_key": "...",
+	}
+)
 ```
 
 | Function | Returns |

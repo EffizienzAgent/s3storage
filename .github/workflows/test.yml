@@ -58,7 +58,7 @@ jobs:
         with:
           node-version: '24'
       - name: Lint
-        run: pip install ruff && ruff check . && ruff format --check .
+        run: pip install ruff==0.17.2 && ruff check . && ruff format --check .
       - name: Read pinned versions
         run: grep -E '^[A-Z_]+=' .github/versions.env >> "$GITHUB_ENV"
       - uses: actions/cache@v6
