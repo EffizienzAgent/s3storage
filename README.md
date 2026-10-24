@@ -62,7 +62,8 @@ Other apps can reuse the S3 connection and protect files from deletion. See
 [docs/extending.md](docs/extending.md):
 
 - `s3storage.client.get_client(target)` returns a boto3 client and bucket config for a named target.
-- The hooks `s3storage_before_file_delete` and `s3storage_before_object_change` run before bytes are deleted or overwritten, from whichever `File` row, and may refuse.
+- The hooks `s3storage_before_file_delete`, `s3storage_before_object_delete` and `s3storage_before_object_write`
+  run before bytes are deleted or overwritten, from whichever `File` row, and may refuse.
 
 ## Limits
 

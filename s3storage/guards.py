@@ -35,11 +35,19 @@ def before_file_delete(file):
 		frappe.get_attr(method)(file)
 
 
-def before_object_change(file_url, action, file=None):
-	files = affected_files(file_url)
-	if file and file.name not in {other.name for other in files}:
-		files.append(file)
-	for other in files:
-		before_file_delete(other)
-	for method in frappe.get_hooks("s3storage_before_object_change"):
-		frappe.get_attr(method)(file_url, action, file)
+def before_object_delete(file_url):
+	run_object_hooks("s3storage_before_object_delete", file_url)
+
+
+def before_object_write(file_url):
+	run_object_hooks("s3storage_before_object_write", file_url)
+
+
+def run_object_hooks(hook, file_url):
+	from s3storage import storage
+
+	for file in affected_files(file_url):
+		before_file_delete(file)
+	key = storage.safe_key_for(file_url)
+	for method in frappe.get_hooks(hook):
+		frappe.get_attr(method)(file_url=file_url, key=key)

@@ -607,8 +607,16 @@ def refuse_protected(file):
 		raise DeleteRefused(f"{file.name} is protected")
 
 
-def record_object_change(file_url, action, file):
-	frappe.flags.s3storage_changes.append((file_url, action, file.name if file else None))
+def record_delete(file_url=None, *, key=None):
+	frappe.flags.s3storage_changes.append(("delete", file_url, key))
+
+
+def record_write(file_url=None, *, key=None):
+	frappe.flags.s3storage_changes.append(("write", file_url, key))
+
+
+def refuse_object(file_url=None, *, key=None):
+	raise DeleteRefused(f"{key} is protected")
 
 
 class TestInlineServing(S3FilesTestCase):
@@ -751,7 +759,8 @@ class TestSharedObjects(S3FilesTestCase):
 			self.patch_hooks(
 				{
 					"s3storage_before_file_delete": [f"{__name__}.refuse_protected"],
-					"s3storage_before_object_change": [f"{__name__}.record_object_change"],
+					"s3storage_before_object_delete": [f"{__name__}.record_delete"],
+					"s3storage_before_object_write": [f"{__name__}.record_write"],
 				}
 			)
 		)
@@ -796,12 +805,47 @@ class TestSharedObjects(S3FilesTestCase):
 			frappe.get_doc("File", self.protected.name).save_file(content=unique_png(), overwrite=True)
 		self.assertEqual(self.s3.content(self.key), before)
 
-	def test_object_change_hook_sees_deletes(self):
+	def changes(self):
+		return frappe.flags.s3storage_changes
+
+	def test_object_hooks_see_deletes(self):
 		frappe.flags.s3storage_protected = set()
 		self.protected.delete()
-		self.assertIn(
-			(self.protected.file_url, "delete", self.protected.name), frappe.flags.s3storage_changes
-		)
+		self.assertIn(("delete", self.protected.file_url, self.key), self.changes())
+
+	def test_object_hooks_see_overwrites(self):
+		frappe.flags.s3storage_protected = set()
+		frappe.get_doc("File", self.protected.name).save_file(content=unique_png(), overwrite=True)
+		self.assertIn(("write", self.protected.file_url, self.key), self.changes())
+
+	def test_object_hooks_see_privacy_moves_and_thumbnails(self):
+		frappe.flags.s3storage_protected = set()
+		file = frappe.get_doc("File", self.protected.name)
+		file.is_private = 1
+		file.save()
+		new_key = storage.key_for(file.file_url)
+		self.assertIn(("write", file.file_url, new_key), self.changes())
+		self.assertIn(("delete", self.protected.file_url, self.key), self.changes())
+		thumbnail_url = file.make_thumbnail()
+		self.assertIn(("write", thumbnail_url, storage.key_for(thumbnail_url)), self.changes())
+
+	def test_refusing_object_hook_keeps_object(self):
+		frappe.flags.s3storage_protected = set()
+		with self.patch_hooks({"s3storage_before_object_delete": [f"{__name__}.refuse_object"]}):
+			self.assertRaises(DeleteRefused, frappe.get_doc("File", self.protected.name).delete)
+		self.assertIn(self.key, self.s3.keys())
+
+	def test_object_hooks_run_on_local_disk(self):
+		frappe.flags.s3storage_protected = set()
+		with patch.dict(frappe.local.conf, UNSET):
+			file = make_file(f"{self.tag}-local.txt", self.tag.encode())
+			path = file.get_full_path()
+			with self.patch_hooks({"s3storage_before_object_delete": [f"{__name__}.refuse_object"]}):
+				self.assertRaises(DeleteRefused, file.delete)
+			self.assertTrue(os.path.exists(path))
+			file.delete()
+		self.assertIn(("delete", file.file_url, storage.key_for(file.file_url)), self.changes())
+		self.assertFalse(os.path.exists(path))
 
 
 class TestThumbnails(S3FilesTestCase):

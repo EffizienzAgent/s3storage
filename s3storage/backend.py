@@ -13,6 +13,9 @@ def write_file(file, content=None, content_type=None, is_private=0):
 	if isinstance(file, str):
 		return _write_named(file, content, content_type, is_private)
 	if not storage.is_active():
+		local_url = file_url_for(get_safe_file_name(file.file_name), file.is_private)
+		if not file.is_new() and local_url == file.file_url:
+			guards.before_object_write(local_url)
 		return file.save_file_on_filesystem()
 	if file.is_remote_file:
 		return None
@@ -27,7 +30,7 @@ def write_file(file, content=None, content_type=None, is_private=0):
 		name = free_name(name, file.content_hash, file.is_private)
 		url = file_url_for(name, file.is_private)
 	else:
-		guards.before_object_change(url, "overwrite", file)
+		guards.before_object_write(url)
 
 	store(url, file._content)
 	file.file_name = name
@@ -48,15 +51,18 @@ def _write_named(fname, content, content_type, is_private):
 
 
 def delete_file_data_content(file, only_thumbnail=False):
+	urls = [file.thumbnail_url] if only_thumbnail else [file.file_url, file.thumbnail_url]
 	if not storage.is_active():
+		for url in urls:
+			if storage.safe_key_for(url):
+				guards.before_object_delete(url)
 		return file.delete_file_from_filesystem(only_thumbnail=only_thumbnail)
 
-	urls = [file.thumbnail_url] if only_thumbnail else [file.file_url, file.thumbnail_url]
 	for url in urls:
 		key = storage.safe_key_for(url)
 		if not key or is_shared(url, file.name):
 			continue
-		guards.before_object_change(url, "delete", file)
+		guards.before_object_delete(url)
 		storage.delete(key)
 		delete_file(url)
 

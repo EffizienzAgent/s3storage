@@ -116,6 +116,10 @@ class S3File(File):
 
 	def make_thumbnail(self, set_as_thumbnail=True, width=300, height=300, suffix="small", crop=False):
 		if not self.in_s3():
+			if self.file_url and not self.is_folder and not self.is_remote_file:
+				filename, _dot, extn = self.file_url.rpartition(".")
+				if filename:
+					guards.before_object_write(f"{filename}_{suffix}.{extn}")
 			return super().make_thumbnail(set_as_thumbnail, width, height, suffix, crop)
 		from PIL import Image, ImageOps
 
@@ -152,15 +156,19 @@ class S3File(File):
 			frappe.msgprint(_("Unable to write file format for {0}").format(thumbnail_url))
 			return None
 
-		if thumbnail_url == self.thumbnail_url:
-			guards.before_object_change(thumbnail_url, "overwrite", self)
+		guards.before_object_write(thumbnail_url)
 		storage.put(storage.key_for(thumbnail_url), buffer.getvalue())
 		if set_as_thumbnail:
 			self.db_set("thumbnail_url", thumbnail_url)
 		return thumbnail_url
 
 	def handle_is_private_changed(self):
-		if not storage.is_active() or self.is_remote_file:
+		if self.is_remote_file:
+			return super().handle_is_private_changed()
+		if not storage.is_active():
+			if self.file_url and storage.safe_key_for(self.file_url):
+				guards.before_object_write(moved_url(self.file_url, self.is_private))
+				guards.before_object_delete(self.file_url)
 			return super().handle_is_private_changed()
 
 		before = self.get_doc_before_save()
@@ -207,10 +215,11 @@ class S3File(File):
 		content = storage.read_file_url(old_url)
 		if content is None:
 			return old_url
+		guards.before_object_write(new_url)
 		storage.put(storage.key_for(new_url), content)
 		deleted = not guards.files_using(old_url, exclude=self.name)
 		if deleted:
-			guards.before_object_change(old_url, "delete", self)
+			guards.before_object_delete(old_url)
 			storage.delete(storage.key_for(old_url))
 			delete_file(old_url)
 		self.flags.s3_moved.append({"old": old_url, "new": new_url, "deleted": deleted})
