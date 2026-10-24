@@ -1,7 +1,7 @@
 [project]
 name = "s3storage"
 authors = [
-    { name = "EffizienzAgent", email = "info@effizienzagent.de"}
+    { name = "EffizienzAgent", email = "oss@effizienzagent.de"}
 ]
 description = "S3-compatible file storage for the Frappe Framework"
 requires-python = ">=3.14"
@@ -9,6 +9,7 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
+    "boto3>=1.36,<2",
 ]
 
 [build-system]
