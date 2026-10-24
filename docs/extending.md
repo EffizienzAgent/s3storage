@@ -75,4 +75,37 @@ Each function gets the `File` document. They run at the start of `File.on_trash`
 deleted from the bucket or the local disk, also while the S3 storage is not configured. Raising an exception
 cancels the delete: the `File` row and its bytes stay.
 
-The hook does not run for other ways bytes change, such as making a file private or rolling back a new upload.
+The hook also runs before an object is deleted or overwritten through any other path, for every `File` whose
+`file_url` or `thumbnail_url` is that object, so a host app can protect an object no matter which row
+triggers the change. When a file is made private or public, it runs for the file itself and every `File` that
+shares its URL or `content_hash`. An object that other rows still use is never deleted: a private/public
+change then copies it.
+
+## Object hooks
+
+Two hooks work on objects instead of rows:
+
+```python
+s3storage_before_object_delete = ["myapp.guards.before_object_delete"]
+s3storage_before_object_write = ["myapp.guards.before_object_write"]
+```
+
+```python
+def before_object_delete(file_url=None, *, key=None):
+	if is_archived_url(file_url):
+		frappe.throw(_("Archived files cannot be deleted"))
+
+
+def before_object_write(file_url=None, *, key=None):
+	if is_archived_url(file_url):
+		frappe.throw(_("Archived files cannot be changed"))
+```
+
+Each function is called as `fn(file_url=..., key=...)`, with the `file_url` (for example
+`/private/files/x.pdf`) and the object key (`private/files/x.pdf`). Raising an exception refuses the action.
+They run with S3 active and also while files are on local disk:
+
+| Hook | Runs before |
+|---|---|
+| `s3storage_before_object_delete` | `delete_file_data_content` (deleting a `File` or its thumbnail), removing the old object when a file is made private or public |
+| `s3storage_before_object_write` | overwriting a file's own object (`save_file(overwrite=True)`, `optimize_file`), writing a thumbnail, writing the new object when a file is made private or public |

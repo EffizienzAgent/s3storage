@@ -37,3 +37,11 @@ msgstr ""
 #: s3storage/serve.py:103 s3storage/serve.py:108 s3storage/serve.py:111
 msgid "You don't have permission to access this file"
 msgstr ""
+
+#: s3storage/file.py:52
+msgid "Field {0} of a file cannot be changed"
+msgstr ""
+
+#: s3storage/file.py:63
+msgid "You do not have permission to access this file"
+msgstr ""

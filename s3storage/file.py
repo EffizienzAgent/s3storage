@@ -5,15 +5,12 @@ import tempfile
 import frappe
 from frappe import _
 from frappe.core.doctype.file.file import FILE_ENCODING_OPTIONS, OLE_FILE_SIGNATURE, File
-from frappe.core.doctype.file.utils import (
-	delete_file,
-	get_content_hash,
-	get_extension,
-	update_existing_file_docs,
-)
+from frappe.core.doctype.file.utils import delete_file, get_content_hash, get_extension
 from frappe.utils import cint
 
-from s3storage import storage
+from s3storage import backend, guards, storage
+
+PROTECTED_FIELDS = ("file_url", "thumbnail_url", "content_hash")
 
 
 def decode(content, encodings=None):
@@ -29,9 +26,48 @@ def decode(content, encodings=None):
 
 class S3File(File):
 	def on_trash(self):
-		for method in frappe.get_hooks("s3storage_before_file_delete"):
-			frappe.get_attr(method)(self)
+		guards.before_file_delete(self)
 		super().on_trash()
+
+	def before_insert(self):
+		if self.file_url and not self.get("content") and not self.is_folder:
+			self.check_existing_object_access()
+		super().before_insert()
+
+	def validate(self):
+		self.check_protected_fields()
+		super().validate()
+
+	def check_protected_fields(self):
+		if self.is_new() or getattr(self, "_s3storage_internal", False):
+			return
+		before = self.get_doc_before_save()
+		if not before:
+			return
+		changed = [
+			field for field in PROTECTED_FIELDS if (self.get(field) or None) != (before.get(field) or None)
+		]
+		if changed:
+			frappe.throw(
+				_("Field {0} of a file cannot be changed").format(", ".join(changed)), frappe.PermissionError
+			)
+
+	def check_existing_object_access(self):
+		if not storage.is_active() or not str(self.file_url).startswith("/private/files/"):
+			return
+		if frappe.session.user == "Administrator" or frappe.flags.in_install or frappe.flags.in_migrate:
+			return
+		if guards.readable_by_user(self.file_url):
+			return
+		if storage.file_exists(self.file_url):
+			frappe.throw(_("You do not have permission to access this file"), frappe.PermissionError)
+
+	def optimize_file(self):
+		self._s3storage_internal = True
+		try:
+			return super().optimize_file()
+		finally:
+			self._s3storage_internal = False
 
 	def in_s3(self):
 		return (
@@ -80,6 +116,10 @@ class S3File(File):
 
 	def make_thumbnail(self, set_as_thumbnail=True, width=300, height=300, suffix="small", crop=False):
 		if not self.in_s3():
+			if self.file_url and not self.is_folder and not self.is_remote_file:
+				filename, _dot, extn = self.file_url.rpartition(".")
+				if filename:
+					guards.before_object_write(f"{filename}_{suffix}.{extn}")
 			return super().make_thumbnail(set_as_thumbnail, width, height, suffix, crop)
 		from PIL import Image, ImageOps
 
@@ -104,6 +144,11 @@ class S3File(File):
 			image.thumbnail(size, Image.Resampling.LANCZOS)
 
 		thumbnail_url = f"{filename}_{suffix}.{extn}"
+		if thumbnail_url != self.thumbnail_url and backend.is_taken(thumbnail_url):
+			name = backend.free_name(
+				thumbnail_url.rsplit("/", 1)[-1], None, thumbnail_url.startswith("/private/")
+			)
+			thumbnail_url = backend.file_url_for(name, thumbnail_url.startswith("/private/"))
 		buffer = io.BytesIO()
 		try:
 			image.save(buffer, format=image_format)
@@ -111,37 +156,46 @@ class S3File(File):
 			frappe.msgprint(_("Unable to write file format for {0}").format(thumbnail_url))
 			return None
 
+		guards.before_object_write(thumbnail_url)
 		storage.put(storage.key_for(thumbnail_url), buffer.getvalue())
 		if set_as_thumbnail:
 			self.db_set("thumbnail_url", thumbnail_url)
 		return thumbnail_url
 
 	def handle_is_private_changed(self):
-		if not storage.is_active() or self.is_remote_file:
+		if self.is_remote_file:
+			return super().handle_is_private_changed()
+		if not storage.is_active():
+			if self.file_url and storage.safe_key_for(self.file_url):
+				guards.before_object_write(moved_url(self.file_url, self.is_private))
+				guards.before_object_delete(self.file_url)
 			return super().handle_is_private_changed()
 
-		old_file_url = self.file_url
-		file_name = old_file_url.split("/")[-1]
-		new_file_url = f"/private/files/{file_name}" if cint(self.is_private) else f"/files/{file_name}"
+		before = self.get_doc_before_save()
+		old_file_url = before.file_url if before else self.file_url
+		new_file_url = moved_url(old_file_url, self.is_private)
 		if new_file_url == old_file_url:
 			return
 
-		content = storage.read_file_url(old_file_url)
-		if content is None:
+		if storage.read_file_url(old_file_url) is None:
 			frappe.throw(_("Cannot find file {} on disk").format(old_file_url), exc=FileNotFoundError)
-		if storage.file_exists(new_file_url):
+		if guards.files_using(new_file_url, exclude=self.name) or storage.file_exists(new_file_url):
 			frappe.throw(
 				_("A file with same name {} already exists").format(new_file_url), exc=FileExistsError
 			)
 
-		storage.put(storage.key_for(new_file_url), content)
-		storage.delete(storage.key_for(old_file_url))
-		delete_file(old_file_url)
-		self.flags.s3_moved = {"old": old_file_url, "new": new_file_url}
-		frappe.db.after_rollback.add(self.on_rollback)
+		for file in guards.affected_files(old_file_url, self.content_hash, exclude=self.name):
+			guards.before_file_delete(file)
+		guards.before_file_delete(self)
 
-		self.file_url = new_file_url
-		update_existing_file_docs(self)
+		self.flags.s3_moved = []
+		frappe.db.after_rollback.add(self.on_rollback)
+		self.file_url = self.move_object(old_file_url, new_file_url)
+		thumbnail_url = before.thumbnail_url if before else self.thumbnail_url
+		if thumbnail_url and storage.safe_key_for(thumbnail_url):
+			new_thumbnail_url = moved_url(thumbnail_url, self.is_private)
+			if not guards.files_using(new_thumbnail_url) and not storage.file_exists(new_thumbnail_url):
+				self.thumbnail_url = self.move_object(thumbnail_url, new_thumbnail_url)
 
 		if (
 			not self.attached_to_doctype
@@ -157,6 +211,20 @@ class S3File(File):
 				self.attached_to_doctype, self.attached_to_name, self.attached_to_field, self.file_url
 			)
 
+	def move_object(self, old_url, new_url):
+		content = storage.read_file_url(old_url)
+		if content is None:
+			return old_url
+		guards.before_object_write(new_url)
+		storage.put(storage.key_for(new_url), content)
+		deleted = not guards.files_using(old_url, exclude=self.name)
+		if deleted:
+			guards.before_object_delete(old_url)
+			storage.delete(storage.key_for(old_url))
+			delete_file(old_url)
+		self.flags.s3_moved.append({"old": old_url, "new": new_url, "deleted": deleted})
+		return new_url
+
 	def on_rollback(self):
 		if not storage.is_active():
 			return super().on_rollback()
@@ -167,11 +235,12 @@ class S3File(File):
 			return
 
 		target = self.file_url
-		moved = self.flags.pop("s3_moved", None)
-		if moved:
-			storage.copy(storage.key_for(moved["new"]), storage.key_for(moved["old"]))
+		for moved in self.flags.pop("s3_moved", None) or []:
+			if moved["deleted"]:
+				storage.copy(storage.key_for(moved["new"]), storage.key_for(moved["old"]))
 			storage.delete(storage.key_for(moved["new"]))
-			target = moved["old"]
+			if moved["new"] == self.file_url:
+				target = moved["old"]
 
 		original = self.flags.pop("original_content", None)
 		if original and storage.key_for(target):
@@ -189,3 +258,8 @@ class S3File(File):
 				return super().unzip()
 			finally:
 				del self.get_full_path
+
+
+def moved_url(file_url, is_private):
+	name = file_url.split("/files/", 1)[1]
+	return f"/private/files/{name}" if cint(is_private) else f"/files/{name}"

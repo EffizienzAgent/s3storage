@@ -21,6 +21,8 @@ Checksums are only sent when an operation requires them, which keeps it compatib
 
 The bucket should be private. The app never needs public-read access.
 
+The client is boto3. Use `urllib3>=2.5.0`, which fixes two redirect-handling security issues (CVE-2025-50181, CVE-2025-50182).
+
 ### Example: Hetzner Object Storage
 
 ```json
@@ -65,7 +67,38 @@ The key is the stored `file_url` path as is. It is never URL-decoded. A `file_ur
 `#`, a backslash or a control character is rejected (`UnsafeFileURL`): uploads fail, downloads return 403 and
 the migration reports it as `unsafe_url`.
 
+## How files are served
+
+The response type is decided by the stored `file_url`, never by `file_name` or the object's metadata.
+Every response sends `X-Content-Type-Options: nosniff` and a `Content-Security-Policy`.
+
+| File type | Response |
+|---|---|
+| PNG, JPEG, GIF, WebP, plain text, audio, video | Inline, with its own type and `sandbox; default-src 'none'` |
+| PDF | Inline, without a CSP: browsers do not render PDFs in a sandboxed document. Frappe rejects PDF uploads that contain JavaScript. |
+| `.html`, `.htm` (while `s3storage_html_inline` is on) | Inline as `text/html` with `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads` |
+| Everything else, including SVG and XML types | `attachment` as `application/octet-stream` with `sandbox; default-src 'none'` |
+
+The HTML sandbox never includes `allow-same-origin`. A page runs in an opaque origin: scripts work, but it
+cannot read the site's cookies, local storage or API.
+
+An HTML file still opens as a full page on the site's domain, so an uploaded page could be used for phishing
+(for example a fake login form). If users you do not trust can upload files, set `s3storage_html_inline` to `0`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `s3storage_html_inline` | `1` | Serve HTML files inline in the script sandbox. Set `0` to download them instead. |
+
+Private files are only served for a `File` row whose `file_url` matches the request path exactly (the database
+match is case-insensitive, the app's check is not) and that the user may read.
+
+## File rows
+
+A `File`'s `file_url`, `thumbnail_url` and `content_hash` cannot be changed through a normal save. A new row
+that points at an existing private file is only allowed if the user can read a `File` with exactly that URL.
+
 ## Web server
 
 With the standard Frappe nginx config, nginx serves files that still exist on local disk and passes a miss
-on to Frappe, which then streams the object from the bucket. No nginx change is needed.
+on to Frappe, which then streams the object from the bucket. No nginx change is needed. Files nginx serves
+from local disk do not get the headers above, so run the migration and remove the local copies.

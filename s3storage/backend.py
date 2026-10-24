@@ -4,7 +4,7 @@ from frappe.core.doctype.file.utils import delete_file, get_file_name, get_safe_
 from frappe.utils import cint
 from frappe.utils.file_manager import save_file_on_filesystem
 
-from s3storage import storage
+from s3storage import guards, storage
 
 MAX_NAME_ATTEMPTS = 10
 
@@ -13,6 +13,9 @@ def write_file(file, content=None, content_type=None, is_private=0):
 	if isinstance(file, str):
 		return _write_named(file, content, content_type, is_private)
 	if not storage.is_active():
+		local_url = file_url_for(get_safe_file_name(file.file_name), file.is_private)
+		if not file.is_new() and local_url == file.file_url:
+			guards.before_object_write(local_url)
 		return file.save_file_on_filesystem()
 	if file.is_remote_file:
 		return None
@@ -26,6 +29,8 @@ def write_file(file, content=None, content_type=None, is_private=0):
 	if file.is_new() or url != file.file_url:
 		name = free_name(name, file.content_hash, file.is_private)
 		url = file_url_for(name, file.is_private)
+	else:
+		guards.before_object_write(url)
 
 	store(url, file._content)
 	file.file_name = name
@@ -46,16 +51,18 @@ def _write_named(fname, content, content_type, is_private):
 
 
 def delete_file_data_content(file, only_thumbnail=False):
+	urls = [file.thumbnail_url] if only_thumbnail else [file.file_url, file.thumbnail_url]
 	if not storage.is_active():
+		for url in urls:
+			if storage.safe_key_for(url):
+				guards.before_object_delete(url)
 		return file.delete_file_from_filesystem(only_thumbnail=only_thumbnail)
 
-	targets = [("thumbnail_url", file.thumbnail_url)]
-	if not only_thumbnail:
-		targets.insert(0, ("file_url", file.file_url))
-	for field, url in targets:
+	for url in urls:
 		key = storage.safe_key_for(url)
-		if not key or is_shared(field, url, file.name):
+		if not key or is_shared(url, file.name):
 			continue
+		guards.before_object_delete(url)
 		storage.delete(key)
 		delete_file(url)
 
@@ -70,7 +77,7 @@ def file_url_for(name, is_private):
 
 
 def is_taken(url):
-	return bool(frappe.db.exists("File", {"file_url": url})) or storage.file_exists(url)
+	return bool(guards.files_using(url)) or storage.file_exists(url)
 
 
 def free_name(name, content_hash=None, is_private=0):
@@ -87,5 +94,5 @@ def free_name(name, content_hash=None, is_private=0):
 	frappe.throw(_("No free file name for {0}").format(name))
 
 
-def is_shared(field, url, name):
-	return bool(frappe.db.exists("File", {field: url, "name": ("!=", name)}))
+def is_shared(url, name):
+	return bool(guards.files_using(url, exclude=name))

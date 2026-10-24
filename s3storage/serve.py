@@ -12,19 +12,46 @@ PRIVATE_CACHE = "private, max-age=3600, stale-while-revalidate=86400"
 CHUNK_SIZE = 64 * 1024
 
 
-def force_download(filename):
-	from frappe.utils.response import FORCE_DOWNLOAD_EXTENSIONS
+INLINE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "text/plain"}
+INLINE_PREFIXES = ("audio/", "video/")
+HTML_EXTENSIONS = (".html", ".htm")
+STRICT_CSP = "sandbox; default-src 'none'"
+HTML_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
 
-	return os.path.splitext(filename)[1].lower() in FORCE_DOWNLOAD_EXTENSIONS
+
+def html_inline():
+	return bool(frappe.conf.get("s3storage_html_inline", True))
 
 
-def file_headers(filename, cache_control):
-	disposition = "attachment" if force_download(filename) else "inline"
-	return {
+def presentation(file_url):
+	"""Return (content type, disposition, CSP) for a file, decided by its stored URL only."""
+	if str(file_url).lower().endswith(HTML_EXTENSIONS) and html_inline():
+		return "text/html", "inline", HTML_CSP
+	content_type = storage.content_type_for(file_url)
+	if content_type == "application/pdf":
+		return content_type, "inline", None
+	if content_type in INLINE_TYPES or content_type.startswith(INLINE_PREFIXES):
+		return content_type, "inline", STRICT_CSP
+	return "application/octet-stream", "attachment", STRICT_CSP
+
+
+def file_headers(file_url, filename, cache_control):
+	content_type, disposition, csp = presentation(file_url)
+	headers = {
+		"Content-Type": content_type,
 		"Cache-Control": cache_control,
 		"X-Content-Type-Options": "nosniff",
 		"Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(filename)}",
 	}
+	if csp:
+		headers["Content-Security-Policy"] = csp
+	return headers
+
+
+def apply_headers(response, file_url, filename, cache_control):
+	for name, value in file_headers(file_url, filename, cache_control).items():
+		response.headers[name] = value
+	return response
 
 
 def stream(file_url, filename, cache_control):
@@ -34,7 +61,7 @@ def stream(file_url, filename, cache_control):
 		return None
 
 	body = obj["Body"]
-	headers = file_headers(filename, cache_control)
+	headers = file_headers(file_url, filename, cache_control)
 
 	etag = (obj.get("ETag") or "").strip('"')
 	request = getattr(frappe.local, "request", None)
@@ -44,12 +71,7 @@ def stream(file_url, filename, cache_control):
 		response.set_etag(etag)
 		return response
 
-	response = Response(
-		body.iter_chunks(CHUNK_SIZE),
-		mimetype=storage.content_type_for(filename),
-		headers=headers,
-		direct_passthrough=True,
-	)
+	response = Response(body.iter_chunks(CHUNK_SIZE), headers=headers, direct_passthrough=True)
 	response.call_on_close(body.close)
 	if obj.get("ContentLength") is not None:
 		response.content_length = obj["ContentLength"]
@@ -77,41 +99,48 @@ class PublicFilePage(BaseRenderer):
 		if path and os.path.isfile(path):
 			from werkzeug.utils import send_file
 
-			response = send_file(
-				path,
-				environ=frappe.local.request.environ,
-				conditional=True,
-				as_attachment=force_download(filename),
-				download_name=filename,
-			)
-			response.headers.update(file_headers(filename, PUBLIC_CACHE))
-			return response
+			response = send_file(path, environ=frappe.local.request.environ, conditional=True)
+			return apply_headers(response, self.url, filename, PUBLIC_CACHE)
 		raise frappe.PageDoesNotExistError
+
+
+def readable_file(file_url, name=None):
+	filters = {"file_url": file_url}
+	if name:
+		filters["name"] = str(name)
+	for row in frappe.get_all("File", filters=filters, fields=["name", "file_url"]):
+		if row.file_url != file_url:
+			continue
+		file = frappe.get_doc("File", row.name)
+		if file.is_downloadable():
+			return file
+	return None
 
 
 def download_private_file(path, original):
 	from frappe.core.doctype.access_log.access_log import make_access_log
-	from frappe.core.doctype.file.utils import find_file_by_url
 	from frappe.utils.response import send_private_file
 	from werkzeug.exceptions import Forbidden
 
+	denied = Forbidden(frappe._("You don't have permission to access this file"))
 	if not storage.is_active():
 		return original(path)
 	try:
 		key = storage.key_for(path)
 	except storage.UnsafeFileURL:
-		raise Forbidden(frappe._("You don't have permission to access this file"))
+		raise denied
 	if not key:
 		return original(path)
 
 	if frappe.session.user == "Guest":
-		raise Forbidden(frappe._("You don't have permission to access this file"))
-	file = find_file_by_url(path, name=frappe.form_dict.fid)
+		raise denied
+	file = readable_file(path, frappe.form_dict.fid)
 	if not file:
-		raise Forbidden(frappe._("You don't have permission to access this file"))
+		raise denied
 
-	make_access_log(doctype="File", document=file.name, file_type=os.path.splitext(path)[-1][1:])
-	response = stream(path, file.file_name, PRIVATE_CACHE)
+	make_access_log(doctype="File", document=file.name, file_type=os.path.splitext(file.file_url)[-1][1:])
+	response = stream(file.file_url, file.file_name, PRIVATE_CACHE)
 	if response is None:
-		return send_private_file(path.split("/private", 1)[1], filename=file.file_name)
+		response = send_private_file(file.file_url.split("/private", 1)[1], filename=file.file_name)
+		apply_headers(response, file.file_url, file.file_name, PRIVATE_CACHE)
 	return response
