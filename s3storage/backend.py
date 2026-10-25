@@ -54,7 +54,9 @@ def _write_named(fname, content, content_type, is_private):
 
 def insert_file(file_name, source, is_private=1, ignore_permissions=False, **fields):
 	"""Store a path or binary file object as a new File, in parts and without reading it into memory."""
-	url = file_url_for(free_name(get_safe_file_name(file_name), None, is_private), is_private)
+	name = get_safe_file_name(file_name)
+	url = file_url_for(unique_name(name, is_private), is_private)
+	fields.setdefault("file_name", name)
 	if storage.is_active():
 		size, content_hash = storage.put_file(storage.key_for(url), source)
 	else:
@@ -96,6 +98,13 @@ def write_local(url, source):
 
 
 def discard(url):
+	if guards.files_using(url):
+		return
+	try:
+		guards.before_object_delete(url)
+	except Exception:
+		frappe.log_error(f"s3storage kept {url}: a hook refused to delete it")
+		return
 	if storage.is_active():
 		storage.delete(storage.key_for(url))
 	delete_file(url)
@@ -138,6 +147,10 @@ def free_name(name, content_hash=None, is_private=0):
 		candidate = get_file_name(name, content_hash[-6:])
 		if not is_taken(file_url_for(candidate, is_private)):
 			return candidate
+	return unique_name(name, is_private)
+
+
+def unique_name(name, is_private=0):
 	for _attempt in range(MAX_NAME_ATTEMPTS):
 		candidate = get_file_name(name)
 		if not is_taken(file_url_for(candidate, is_private)):

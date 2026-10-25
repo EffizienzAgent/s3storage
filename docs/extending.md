@@ -71,7 +71,7 @@ file = insert_file(
 
 | Function | Does |
 |---|---|
-| `insert_file(file_name, source, is_private=1, ignore_permissions=False, **fields)` | Picks a free name, uploads `source` in parts (or writes it to the local files folder while S3 is inactive) and inserts a `File` row with `file_size` and `content_hash`. Returns the `File`. The object is removed again if the insert fails or the transaction is rolled back. |
+| `insert_file(file_name, source, is_private=1, ignore_permissions=False, **fields)` | Uploads `source` in parts (or writes it to the local files folder while S3 is inactive) under a new name with a random suffix, and inserts a `File` row with `file_size` and `content_hash`. The row's `file_name` stays `file_name`. Returns the `File`. The object is removed again if the insert fails or the transaction is rolled back, unless another `File` uses it or an `s3storage_before_object_delete` hook refuses. |
 | `storage.put_file(key, source, content_type=None)` | Uploads a path or binary file object to an object key in parts. Runs `s3storage_before_object_write` for keys of files. Returns `(size, md5)`. |
 | `register_file(file_url, file_size, content_hash, ignore_permissions=False, **fields)` | Inserts a `File` row for an object that is already stored, without reading it. Returns the `File`. |
 
@@ -79,6 +79,18 @@ file = insert_file(
 PDF content check, which only apply to uploaded content. Pass a path where you can: a path is read twice from
 disk (once for the MD5, once for the upload), a seekable file object is read twice from its position, and a
 non-seekable stream is first spooled to a temporary file.
+
+The random suffix keeps concurrent calls with the same `file_name` from writing to the same object.
+
+`register_file` and `storage.put_file` trust their caller. Never pass user input as `file_url` or `key`:
+
+- `register_file` skips the check that a new row for an existing private file needs (see
+  [configuration.md](configuration.md#file-rows)), so a `file_url` from user input could claim an orphaned
+  private object.
+- `storage.put_file` has no permission check and writes any key, including the objects of other files. Only
+  the `s3storage_before_object_write` hooks run.
+
+Build the URL or key in your own code, from a name you picked or got from `insert_file`.
 
 ## Refusing file deletes
 

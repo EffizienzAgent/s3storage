@@ -71,7 +71,7 @@ def migrate_one(file_url, content_hash, dry_run):
 	if dry_run:
 		return [*outcomes, "would_upload"]
 	uploaded = storage.upload(key, path)
-	if uploaded != local or not storage.matches(storage.head(key), size, digest):
+	if uploaded != local or not storage.holds(key, size, digest):
 		return [*outcomes, "verify_failed"]
 	return [*outcomes, "uploaded"]
 
