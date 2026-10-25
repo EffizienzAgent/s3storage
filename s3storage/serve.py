@@ -9,7 +9,6 @@ from s3storage import storage
 
 PUBLIC_CACHE = "public, max-age=3600, stale-while-revalidate=86400"
 PRIVATE_CACHE = "private, max-age=3600, stale-while-revalidate=86400"
-CHUNK_SIZE = 64 * 1024
 
 
 INLINE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "text/plain"}
@@ -56,29 +55,88 @@ def apply_headers(response, file_url, filename, cache_control):
 
 def stream(file_url, filename, cache_control):
 	key = storage.key_for(file_url)
-	obj = storage.open_object(key) if key else None
+	if not key:
+		return None
+	request = getattr(frappe.local, "request", None)
+	headers = file_headers(file_url, filename, cache_control) | {"Accept-Ranges": "bytes"}
+	byte_range = requested_range(request)
+	try:
+		obj = storage.open_object(key, byte_range)
+	except Exception as e:
+		if storage.error_code(e) != "InvalidRange":
+			raise
+		return unsatisfiable(storage.head(key), request, headers)
 	if obj is None:
 		return None
 
+	etag = etag_of(obj)
+	if is_cached(request, etag):
+		obj["Body"].close()
+		return not_modified(etag, headers)
+	if byte_range and not if_range_matches(request, obj):
+		obj["Body"].close()
+		obj = storage.open_object(key)
+		if obj is None:
+			return None
+
 	body = obj["Body"]
-	headers = file_headers(file_url, filename, cache_control)
-
-	etag = (obj.get("ETag") or "").strip('"')
-	request = getattr(frappe.local, "request", None)
-	if etag and request is not None and request.if_none_match.contains(etag):
-		body.close()
-		response = Response(status=304, headers=headers)
-		response.set_etag(etag)
-		return response
-
-	response = Response(body.iter_chunks(CHUNK_SIZE), headers=headers, direct_passthrough=True)
+	response = Response(
+		body.iter_chunks(storage.chunk_size()),
+		status=206 if obj.get("ContentRange") else 200,
+		headers=headers,
+		direct_passthrough=True,
+	)
 	response.call_on_close(body.close)
+	if obj.get("ContentRange"):
+		response.headers["Content-Range"] = obj["ContentRange"]
 	if obj.get("ContentLength") is not None:
 		response.content_length = obj["ContentLength"]
 	if etag:
 		response.set_etag(etag)
 	if obj.get("LastModified"):
 		response.last_modified = obj["LastModified"]
+	return response
+
+
+def requested_range(request):
+	parsed = request.range if request is not None else None
+	if parsed is None or parsed.units != "bytes" or len(parsed.ranges) != 1:
+		return None
+	return parsed.to_header()
+
+
+def if_range_matches(request, obj):
+	if_range = request.if_range
+	if if_range.etag:
+		return if_range.etag == etag_of(obj)
+	if if_range.date:
+		modified = obj.get("LastModified")
+		return bool(modified) and int(modified.timestamp()) == int(if_range.date.timestamp())
+	return True
+
+
+def etag_of(obj):
+	return (obj.get("ETag") or "").strip('"')
+
+
+def is_cached(request, etag):
+	return bool(etag) and request is not None and request.if_none_match.contains(etag)
+
+
+def not_modified(etag, headers):
+	response = Response(status=304, headers=headers)
+	response.set_etag(etag)
+	return response
+
+
+def unsatisfiable(meta, request, headers):
+	if meta is None:
+		return None
+	etag = etag_of(meta)
+	if is_cached(request, etag):
+		return not_modified(etag, headers)
+	response = Response(status=416, headers=headers)
+	response.headers["Content-Range"] = f"bytes */{meta['ContentLength']}"
 	return response
 
 

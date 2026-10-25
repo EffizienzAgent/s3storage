@@ -58,19 +58,20 @@ def file_urls():
 
 def migrate_one(file_url, content_hash, dry_run):
 	key = storage.key_for(file_url)
-	content = storage.read_local(file_url)
+	path = storage.local_path(file_url)
+	local = storage.local_digest(path)
 	meta = storage.head(key)
-	if content is None:
+	if local is None:
 		return ["in_s3_only" if meta else "missing"]
 
-	digest = storage.md5(content)
+	size, digest = local
 	outcomes = ["hash_mismatch"] if content_hash and content_hash != digest else []
-	if storage.matches(meta, len(content), digest):
+	if storage.matches(meta, size, digest):
 		return [*outcomes, "already_uploaded"]
 	if dry_run:
 		return [*outcomes, "would_upload"]
-	storage.put(key, content)
-	if not storage.matches(storage.head(key), len(content), digest):
+	uploaded = storage.upload(key, path)
+	if uploaded != local or not storage.matches(storage.head(key), size, digest):
 		return [*outcomes, "verify_failed"]
 	return [*outcomes, "uploaded"]
 

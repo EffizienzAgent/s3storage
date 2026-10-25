@@ -21,6 +21,33 @@ Checksums are only sent when an operation requires them, which keeps it compatib
 
 The bucket should be private. The app never needs public-read access.
 
+## Large files
+
+| Key | Default | Meaning |
+|---|---|---|
+| `s3storage_part_size` | `8388608` (8 MiB) | Multipart threshold and part size for uploads and copies, at least 5 MiB |
+| `s3storage_max_concurrency` | `4` | Parts transferred in parallel per upload or copy |
+| `s3storage_chunk_size` | `1048576` (1 MiB) | Chunk size for downloads, hashing and spooling |
+
+Uploads at or above the part size use multipart upload and copies use multipart copy, so there is no 5 GB
+limit. S3 allows 10,000 parts, so the part size grows automatically for files above about 80 GB. A failed
+multipart upload is aborted, so no incomplete parts are left behind.
+
+Memory per transfer stays bounded: an upload from a path reads the file from disk part by part, an upload from
+a file object holds at most `s3storage_max_concurrency` parts in memory, and a download holds one chunk.
+Downloads support `Range` requests, so browsers, players and download managers can seek and resume.
+
+Every object stores the MD5 of its content as `md5` metadata, also for multipart uploads, whose ETag is not an
+MD5. Verify and migration use it to compare objects with local files.
+
+Some paths still hold a whole file in memory because Frappe core needs its content as bytes:
+
+- Browser uploads (`upload_file`) and `File` rows saved with `content`, bounded by Frappe's `max_file_size`
+- `File.get_content()`, `optimize_file`, thumbnails, `unzip` (each member of the archive), email attachments
+  and inline images, Typst PDFs
+
+To store large generated files, use `insert_file` (see [extending.md](extending.md#large-files)).
+
 The client is boto3. Use `urllib3>=2.5.0`, which fixes two redirect-handling security issues (CVE-2025-50181, CVE-2025-50182).
 
 ### Example: Hetzner Object Storage
