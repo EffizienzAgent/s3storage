@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/EffizienzAgent/s3storage/compare/v0.2.1...v0.3.0) (2026-10-25)
+
+
+### Features
+
+* support files of any size ([336a38c](https://github.com/EffizienzAgent/s3storage/commit/336a38cdceb5a257dd3d3edaef0b719aaef51bad))
+* support files of any size ([6c9aa57](https://github.com/EffizienzAgent/s3storage/commit/6c9aa57296b1f92b739d72203c697a9647333d81)), closes [#8](https://github.com/EffizienzAgent/s3storage/issues/8)
+
 ## [0.2.1](https://github.com/EffizienzAgent/s3storage/compare/v0.2.0...v0.2.1) (2026-10-24)
 
 
