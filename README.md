@@ -12,6 +12,9 @@ Cloudflare R2 and others that support path-style addressing.
   check and access log, then streams from the bucket. Browsers never get a presigned URL, so the bucket
   stays private.
 - **Public files** are streamed from the bucket with ETag and cache headers.
+- **Files of any size.** Multipart uploads and copies, `Range` downloads and chunked hashing keep memory
+  bounded by the part size, with no 5 GB limit. `insert_file` stores large generated files without reading
+  them into memory.
 - **Safe serving.** Only images, PDF, plain text, audio and video open inline; HTML runs in a script sandbox
   without access to the site; everything else downloads. Every response except PDF is sandboxed with a CSP.
 - **Safe keys.** A `file_url` with `%`, `?`, `#`, a backslash or a control character is rejected instead of
@@ -62,6 +65,7 @@ Other apps can reuse the S3 connection and protect files from deletion. See
 [docs/extending.md](docs/extending.md):
 
 - `s3storage.client.get_client(target)` returns a boto3 client and bucket config for a named target.
+- `s3storage.backend.insert_file(file_name, source)` stores a large file from a path or stream as a `File`.
 - The hooks `s3storage_before_file_delete`, `s3storage_before_object_delete` and `s3storage_before_object_write`
   run before bytes are deleted or overwritten, from whichever `File` row, and may refuse.
 
@@ -69,7 +73,9 @@ Other apps can reuse the S3 connection and protect files from deletion. See
 
 - `bench backup --with-files` only includes local files. Use bucket versioning instead.
 - The Chrome PDF generator reads only local files.
-- Files are streamed through the Frappe workers. That suits office documents and images, not large media.
+- Files are streamed through the Frappe workers, which keeps a worker busy for the length of a download.
+- Browser uploads are held in memory by Frappe and bounded by `max_file_size`. See
+  [docs/configuration.md](docs/configuration.md#large-files) for the paths that load a whole file.
 
 ## Professional setup & support
 

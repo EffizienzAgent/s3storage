@@ -52,6 +52,34 @@ client.put_object(
 )
 ```
 
+## Large files
+
+Generated files of any size, such as export archives, can be stored without reading them into memory:
+
+```python
+from s3storage.backend import insert_file
+
+file = insert_file(
+	"export.zip",
+	"/tmp/export.zip",  # a path or a binary file object
+	is_private=1,
+	attached_to_doctype="Data Export",
+	attached_to_name=name,
+	ignore_permissions=True,
+)
+```
+
+| Function | Does |
+|---|---|
+| `insert_file(file_name, source, is_private=1, ignore_permissions=False, **fields)` | Picks a free name, uploads `source` in parts (or writes it to the local files folder while S3 is inactive) and inserts a `File` row with `file_size` and `content_hash`. Returns the `File`. The object is removed again if the insert fails or the transaction is rolled back. |
+| `storage.put_file(key, source, content_type=None)` | Uploads a path or binary file object to an object key in parts. Runs `s3storage_before_object_write` for keys of files. Returns `(size, md5)`. |
+| `register_file(file_url, file_size, content_hash, ignore_permissions=False, **fields)` | Inserts a `File` row for an object that is already stored, without reading it. Returns the `File`. |
+
+`insert_file` and `register_file` are meant for server-side code: they skip Frappe's `max_file_size` and the
+PDF content check, which only apply to uploaded content. Pass a path where you can: a path is read twice from
+disk (once for the MD5, once for the upload), a seekable file object is read twice from its position, and a
+non-seekable stream is first spooled to a temporary file.
+
 ## Refusing file deletes
 
 Frappe's `doc_events` `on_trash` runs after the `File` controller has already deleted the bytes. To protect a
@@ -108,4 +136,4 @@ They run with S3 active and also while files are on local disk:
 | Hook | Runs before |
 |---|---|
 | `s3storage_before_object_delete` | `delete_file_data_content` (deleting a `File` or its thumbnail), removing the old object when a file is made private or public |
-| `s3storage_before_object_write` | overwriting a file's own object (`save_file(overwrite=True)`, `optimize_file`), writing a thumbnail, writing the new object when a file is made private or public |
+| `s3storage_before_object_write` | overwriting a file's own object (`save_file(overwrite=True)`, `optimize_file`), writing a thumbnail, writing the new object when a file is made private or public, `insert_file` and `storage.put_file` |

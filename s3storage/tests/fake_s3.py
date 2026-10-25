@@ -59,18 +59,44 @@ class FakeS3:
 		self.calls.append("head_object")
 		return self._meta(self._object(Bucket, Key, missing="404"))
 
-	def get_object(self, Bucket, Key):
+	def get_object(self, Bucket, Key, Range=None):
 		self.calls.append("get_object")
 		obj = self._object(Bucket, Key)
-		return {**self._meta(obj), "Body": FakeBody(obj["Body"])}
+		if not Range:
+			return {**self._meta(obj), "Body": FakeBody(obj["Body"])}
+		size = len(obj["Body"])
+		start, end = Range.removeprefix("bytes=").split("-")
+		start, end = (
+			(size - int(end), size - 1) if not start else (int(start), min(int(end or size - 1), size - 1))
+		)
+		if start >= size:
+			raise FakeClientError("InvalidRange")
+		part = obj["Body"][max(start, 0) : end + 1]
+		return {
+			**self._meta(obj),
+			"ContentLength": len(part),
+			"ContentRange": f"bytes {max(start, 0)}-{end}/{size}",
+			"Body": FakeBody(part),
+		}
 
 	def delete_object(self, Bucket, Key):
 		self.calls.append("delete_object")
 		self.objects.pop((Bucket, Key), None)
 
-	def copy_object(self, Bucket, Key, CopySource):
-		self.calls.append("copy_object")
-		self.objects[(Bucket, Key)] = dict(self._object(CopySource["Bucket"], CopySource["Key"]))
+	def copy(self, CopySource, Bucket, Key, ExtraArgs=None, Config=None):
+		self.calls.append("copy")
+		self.objects[(Bucket, Key)] = dict(
+			self._object(CopySource["Bucket"], CopySource["Key"], missing="404")
+		)
+
+	def upload_fileobj(self, Fileobj, Bucket, Key, ExtraArgs=None, Config=None):
+		self.calls.append("upload_fileobj")
+		extra = ExtraArgs or {}
+		self.put_object(Bucket, Key, Fileobj.read(), extra.get("ContentType"), extra.get("Metadata"))
+
+	def upload_file(self, Filename, Bucket, Key, ExtraArgs=None, Config=None):
+		with open(Filename, "rb") as f:
+			self.upload_fileobj(f, Bucket, Key, ExtraArgs, Config)
 
 	def list_objects_v2(self, Bucket, Prefix="", ContinuationToken=None):
 		self.calls.append("list_objects_v2")

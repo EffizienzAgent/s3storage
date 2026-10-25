@@ -12,8 +12,8 @@ from werkzeug.exceptions import Forbidden
 from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
+from s3storage import backend, migrate, overrides, storage, verify
 from s3storage import client as s3client
-from s3storage import migrate, overrides, storage, verify
 from s3storage.serve import PublicFilePage
 from s3storage.tests.fake_s3 import FakeS3
 
@@ -177,6 +177,23 @@ class TestStorage(S3FilesTestCase):
 		frappe.db.delete("File", file.name)
 		file.on_rollback()
 		self.assertNotIn(storage.key_for(file.file_url), self.s3.keys())
+
+	def test_insert_file_stores_stream_and_registers_row(self):
+		file = backend.insert_file(f"{self.tag}.zip", io.BytesIO(b"zip"), attached_to_doctype="User")
+		self.assertEqual(self.s3.content(storage.key_for(file.file_url)), b"zip")
+		self.assertEqual((file.file_size, file.content_hash), (3, storage.md5(b"zip")))
+		self.assertEqual(frappe.get_doc("File", file.name).get_content(), "zip")
+
+	def test_insert_file_on_local_disk(self):
+		with patch.dict(frappe.local.conf, UNSET):
+			file = backend.insert_file(f"{self.tag}.zip", io.BytesIO(b"zip"), is_private=0)
+			with open(file.get_full_path(), "rb") as f:
+				self.assertEqual(f.read(), b"zip")
+			self.assertEqual(
+				(file.file_url, file.content_hash), (f"/files/{self.tag}.zip", storage.md5(b"zip"))
+			)
+			file.delete()
+		self.assertEqual(self.s3.keys(), [])
 
 	def test_making_private_moves_object(self):
 		file = make_file(f"{self.tag}.txt", self.tag.encode())

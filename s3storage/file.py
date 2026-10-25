@@ -5,7 +5,7 @@ import tempfile
 import frappe
 from frappe import _
 from frappe.core.doctype.file.file import FILE_ENCODING_OPTIONS, OLE_FILE_SIGNATURE, File
-from frappe.core.doctype.file.utils import delete_file, get_content_hash, get_extension
+from frappe.core.doctype.file.utils import delete_file, get_extension
 from frappe.utils import cint
 
 from s3storage import backend, guards, storage
@@ -55,7 +55,9 @@ class S3File(File):
 	def check_existing_object_access(self):
 		if not storage.is_active() or not str(self.file_url).startswith("/private/files/"):
 			return
-		if frappe.session.user == "Administrator" or frappe.flags.in_install or frappe.flags.in_migrate:
+		if self.flags.s3storage_new_object or frappe.session.user == "Administrator":
+			return
+		if frappe.flags.in_install or frappe.flags.in_migrate:
 			return
 		if guards.readable_by_user(self.file_url):
 			return
@@ -112,7 +114,12 @@ class S3File(File):
 	def generate_content_hash(self):
 		if self.content_hash or not self.in_s3():
 			return super().generate_content_hash()
-		self.content_hash = get_content_hash(self.read_stored())
+		stored = storage.stream(storage.key_for(self.file_url)) or storage.local_digest(
+			storage.local_path(self.file_url)
+		)
+		if stored is None:
+			frappe.throw(_("File {0} does not exist").format(self.file_url), IOError)
+		self.content_hash = stored[1]
 
 	def make_thumbnail(self, set_as_thumbnail=True, width=300, height=300, suffix="small", crop=False):
 		if not self.in_s3():
@@ -177,7 +184,7 @@ class S3File(File):
 		if new_file_url == old_file_url:
 			return
 
-		if storage.read_file_url(old_file_url) is None:
+		if not storage.file_exists(old_file_url):
 			frappe.throw(_("Cannot find file {} on disk").format(old_file_url), exc=FileNotFoundError)
 		if guards.files_using(new_file_url, exclude=self.name) or storage.file_exists(new_file_url):
 			frappe.throw(
@@ -212,11 +219,16 @@ class S3File(File):
 			)
 
 	def move_object(self, old_url, new_url):
-		content = storage.read_file_url(old_url)
-		if content is None:
+		old_key, new_key = storage.key_for(old_url), storage.key_for(new_url)
+		local = storage.local_path(old_url)
+		in_s3 = storage.exists(old_key)
+		if not in_s3 and not os.path.isfile(local):
 			return old_url
 		guards.before_object_write(new_url)
-		storage.put(storage.key_for(new_url), content)
+		if in_s3:
+			storage.copy(old_key, new_key)
+		else:
+			storage.upload(new_key, local)
 		deleted = not guards.files_using(old_url, exclude=self.name)
 		if deleted:
 			guards.before_object_delete(old_url)
@@ -251,7 +263,8 @@ class S3File(File):
 			return super().unzip()
 		self.check_permission("read")
 		with tempfile.NamedTemporaryFile(suffix=".zip") as archive:
-			archive.write(self.read_stored())
+			if storage.stream(storage.key_for(self.file_url), archive) is None:
+				frappe.throw(_("File {0} does not exist").format(self.file_url), IOError)
 			archive.flush()
 			self.get_full_path = lambda: archive.name
 			try:

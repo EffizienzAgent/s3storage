@@ -1,3 +1,5 @@
+import os
+
 import frappe
 from frappe import _
 from frappe.core.doctype.file.utils import delete_file, get_file_name, get_safe_file_name
@@ -48,6 +50,55 @@ def _write_named(fname, content, content_type, is_private):
 	url = file_url_for(name, is_private)
 	store(url, content)
 	return {"file_name": name, "file_url": url}
+
+
+def insert_file(file_name, source, is_private=1, ignore_permissions=False, **fields):
+	"""Store a path or binary file object as a new File, in parts and without reading it into memory."""
+	url = file_url_for(free_name(get_safe_file_name(file_name), None, is_private), is_private)
+	if storage.is_active():
+		size, content_hash = storage.put_file(storage.key_for(url), source)
+	else:
+		guards.before_object_write(url)
+		size, content_hash = write_local(url, source)
+	frappe.db.after_rollback.add(lambda: discard(url))
+	try:
+		return register_file(url, size, content_hash, ignore_permissions, **fields)
+	except Exception:
+		discard(url)
+		raise
+
+
+def register_file(file_url, file_size, content_hash, ignore_permissions=False, **fields):
+	"""Insert a File row for an object that is already stored, without reading its content."""
+	file = frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_url": file_url,
+			"file_size": file_size,
+			"content_hash": content_hash,
+			"is_private": cint(file_url.startswith("/private/")),
+			**fields,
+		}
+	)
+	file.flags.copy_from_existing_file = True
+	file.flags.s3storage_new_object = True
+	return file.insert(ignore_permissions=ignore_permissions)
+
+
+def write_local(url, source):
+	path = storage.local_path(url)
+	os.makedirs(os.path.dirname(path), exist_ok=True)
+	with open(path, "xb") as out:
+		if not isinstance(source, str | os.PathLike):
+			return storage.digest(storage.read_chunks(source), out)
+		with open(source, "rb") as f:
+			return storage.digest(storage.read_chunks(f), out)
+
+
+def discard(url):
+	if storage.is_active():
+		storage.delete(storage.key_for(url))
+	delete_file(url)
 
 
 def delete_file_data_content(file, only_thumbnail=False):
