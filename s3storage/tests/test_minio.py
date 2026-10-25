@@ -73,6 +73,12 @@ class TestMinio(MinioTestCase):
 		self.request(file.file_url)
 		self.assertEqual(body(response.download_private_file(file.file_url)), b"a,1")
 
+	def test_conditional_put_refuses_an_existing_key(self):
+		key = f"public/files/{self.tag}.txt"
+		self.assertTrue(storage.put(key, b"first", if_absent=True))
+		self.assertFalse(storage.put(key, b"second", if_absent=True))
+		self.assertEqual(storage.get(key), b"first")
+
 	def test_refusing_hook_keeps_object(self):
 		file = make_file(f"{self.tag}.txt", self.tag.encode())
 		key = storage.key_for(file.file_url)

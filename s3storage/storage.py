@@ -13,6 +13,8 @@ from s3storage.client import FILES, client_for, target_config
 
 URL_PREFIXES = {"/private/files/": "private/files/", "/files/": "public/files/"}
 MISSING_CODES = {"404", "NoSuchKey", "NotFound"}
+TAKEN_CODES = {"412", "409", "PreconditionFailed", "ConditionalRequestConflict"}
+UNSUPPORTED_CODES = {"501", "NotImplemented"}
 UNSAFE_CHARS = re.compile(r"[%?#\\\x00-\x1f\x7f]")
 MIB = 1024 * 1024
 DEFAULT_CHUNK_SIZE = MIB
@@ -153,16 +155,28 @@ def content_type_for(name):
 	return mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
-def put(key, content):
+def put(key, content, if_absent=False):
+	"""Store `content` at `key`. With `if_absent`, return False instead of overwriting an existing object."""
 	if isinstance(content, str):
 		content = content.encode()
-	client().put_object(
-		Bucket=bucket(),
-		Key=key,
-		Body=content,
-		ContentType=content_type_for(key),
-		Metadata={"md5": md5(content)},
-	)
+	args = {
+		"Bucket": bucket(),
+		"Key": key,
+		"Body": content,
+		"ContentType": content_type_for(key),
+		"Metadata": {"md5": md5(content)},
+	}
+	if if_absent:
+		try:
+			client().put_object(**args, IfNoneMatch="*")
+			return True
+		except Exception as e:
+			if error_code(e) in TAKEN_CODES:
+				return False
+			if error_code(e) not in UNSUPPORTED_CODES:
+				raise
+	client().put_object(**args)
+	return True
 
 
 def put_file(key, source, content_type=None):
