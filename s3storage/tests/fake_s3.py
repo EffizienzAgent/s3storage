@@ -37,8 +37,10 @@ class FakeS3:
 	def content(self, key, bucket="files"):
 		return self.objects[(bucket, key)]["Body"]
 
-	def put_object(self, Bucket, Key, Body, ContentType=None, Metadata=None):
+	def put_object(self, Bucket, Key, Body, ContentType=None, Metadata=None, IfNoneMatch=None):
 		self.calls.append("put_object")
+		if IfNoneMatch == "*" and (Bucket, Key) in self.objects:
+			raise FakeClientError("PreconditionFailed")
 		self.objects[(Bucket, Key)] = {
 			"Body": bytes(Body),
 			"ContentType": ContentType,

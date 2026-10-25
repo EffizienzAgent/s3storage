@@ -19,6 +19,10 @@ the order of deploying the app and setting the keys does not matter.
 The client uses path-style addressing, three retries, a 5 s connect timeout and a 30 s read timeout.
 Checksums are only sent when an operation requires them, which keeps it compatible with Ceph RGW.
 
+New files are written with a conditional PUT (`If-None-Match: *`), so two uploads with the same name at the
+same moment never overwrite each other: the second gets a suffixed name. AWS S3, MinIO and Ceph RGW support
+it. A provider that answers `NotImplemented` gets a plain PUT.
+
 The bucket should be private. The app never needs public-read access.
 
 ## Large files

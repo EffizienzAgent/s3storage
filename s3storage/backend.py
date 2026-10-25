@@ -29,12 +29,11 @@ def write_file(file, content=None, content_type=None, is_private=0):
 	name = get_safe_file_name(file.file_name)
 	url = file_url_for(name, file.is_private)
 	if file.is_new() or url != file.file_url:
-		name = free_name(name, file.content_hash, file.is_private)
-		url = file_url_for(name, file.is_private)
+		name, url = store_new(name, file._content, file.content_hash, file.is_private)
 	else:
 		guards.before_object_write(url)
+		store(url, file._content)
 
-	store(url, file._content)
 	file.file_name = name
 	file.file_url = url
 	frappe.db.after_rollback.add(file.on_rollback)
@@ -46,9 +45,7 @@ def _write_named(fname, content, content_type, is_private):
 		return save_file_on_filesystem(fname, content, content_type=content_type, is_private=is_private)
 	if isinstance(content, str):
 		content = content.encode()
-	name = free_name(get_safe_file_name(fname), storage.md5(content), is_private)
-	url = file_url_for(name, is_private)
-	store(url, content)
+	name, url = store_new(get_safe_file_name(fname), content, storage.md5(content), is_private)
 	return {"file_name": name, "file_url": url}
 
 
@@ -130,6 +127,17 @@ def delete_file_data_content(file, only_thumbnail=False):
 def store(url, content):
 	storage.put(storage.key_for(url), content)
 	delete_file(url)
+
+
+def store_new(name, content, content_hash, is_private):
+	"""Store content under a free name, without overwriting an object that a concurrent upload just wrote."""
+	candidate = free_name(name, content_hash, is_private)
+	for _attempt in range(MAX_NAME_ATTEMPTS):
+		url = file_url_for(candidate, is_private)
+		if storage.put(storage.key_for(url), content, if_absent=True):
+			return candidate, url
+		candidate = unique_name(name, is_private)
+	frappe.throw(_("No free file name for {0}").format(name))
 
 
 def file_url_for(name, is_private):

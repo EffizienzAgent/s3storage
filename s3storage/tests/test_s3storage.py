@@ -15,7 +15,7 @@ from werkzeug.wrappers import Request
 from s3storage import backend, migrate, overrides, storage, verify
 from s3storage import client as s3client
 from s3storage.serve import PublicFilePage
-from s3storage.tests.fake_s3 import FakeS3
+from s3storage.tests.fake_s3 import FakeClientError, FakeS3
 
 CONFIG = {
 	"s3_files_endpoint": "https://s3.example.com",
@@ -152,6 +152,33 @@ class TestStorage(S3FilesTestCase):
 		self.assertNotEqual(file.file_url, f"/files/{self.tag}.txt")
 		self.assertEqual(self.s3.content(f"public/files/{self.tag}.txt"), b"other")
 		self.assertEqual(self.s3.content(storage.key_for(file.file_url)), b"mine")
+
+	def test_upload_does_not_overwrite_an_object_written_after_the_name_check(self):
+		key = f"public/files/{self.tag}.txt"
+		taken = backend.free_name
+
+		def race(name, content_hash=None, is_private=0):
+			free = taken(name, content_hash, is_private)
+			self.s3.put_object(Bucket="files", Key=key, Body=b"concurrent")
+			return free
+
+		with patch.object(backend, "free_name", side_effect=race):
+			file = make_file(f"{self.tag}.txt", b"mine")
+		self.assertEqual(self.s3.content(key), b"concurrent")
+		self.assertNotEqual(file.file_url, f"/files/{self.tag}.txt")
+		self.assertEqual(self.s3.content(storage.key_for(file.file_url)), b"mine")
+
+	def test_conditional_put_falls_back_where_unsupported(self):
+		put_object = self.s3.put_object
+
+		def no_conditions(*args, IfNoneMatch=None, **kwargs):
+			if IfNoneMatch:
+				raise FakeClientError("NotImplemented")
+			return put_object(*args, **kwargs)
+
+		with patch.object(self.s3, "put_object", side_effect=no_conditions):
+			self.assertTrue(storage.put(f"public/files/{self.tag}.txt", b"data", if_absent=True))
+		self.assertEqual(self.s3.content(f"public/files/{self.tag}.txt"), b"data")
 
 	def test_duplicate_content_shares_one_object_until_last_delete(self):
 		content = self.tag.encode()
