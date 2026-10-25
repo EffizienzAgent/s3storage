@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/EffizienzAgent/s3storage/compare/v0.3.1...v0.3.2) (2026-10-25)
+
+
+### Bug Fixes
+
+* never overwrite a concurrent upload with the same name ([57c676c](https://github.com/EffizienzAgent/s3storage/commit/57c676c0324df6aa9ebefe6077653eaba72209ce))
+
 ## [0.3.1](https://github.com/EffizienzAgent/s3storage/compare/v0.3.0...v0.3.1) (2026-10-25)
 
 
