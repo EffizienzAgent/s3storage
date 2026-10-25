@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "timezone": "Europe/Berlin",
   "schedule": ["before 6am on monday"],
   "customManagers": [
@@ -12,6 +12,13 @@
       "datasourceTemplate": "git-refs",
       "depNameTemplate": "frappe",
       "packageNameTemplate": "https://github.com/frappe/frappe"
+    },
+    {
+      "customType": "regex",
+      "description": "frappe-bench version CI installs",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["pip install (?<depName>frappe-bench)==(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi"
     }
   ],
   "packageRules": [
