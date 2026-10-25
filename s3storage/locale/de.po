@@ -1,5 +1,5 @@
 # German translations for S3 Storage.
-# Copyright (C) 2026 EffizienzAgent
+# Copyright (C) 2026 EffizienzAgent (Tobias Mende)
 # This file is distributed under the same license as the S3 Storage project.
 #
 msgid ""
