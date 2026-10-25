@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/EffizienzAgent/s3storage/compare/v0.3.0...v0.3.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* harden large-file uploads after the 0.3.0 review ([9928959](https://github.com/EffizienzAgent/s3storage/commit/9928959c0d135af90c167045ad6b70a257bd83e2))
+* harden large-file uploads after the 0.3.0 review ([ba8fcff](https://github.com/EffizienzAgent/s3storage/commit/ba8fcff3c9cabd4eae908f936356a517b5727798)), closes [#11](https://github.com/EffizienzAgent/s3storage/issues/11)
+
 ## [0.3.0](https://github.com/EffizienzAgent/s3storage/compare/v0.2.1...v0.3.0) (2026-10-25)
 
 
