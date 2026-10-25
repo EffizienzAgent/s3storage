@@ -25,20 +25,28 @@ The bucket should be private. The app never needs public-read access.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `s3storage_part_size` | `8388608` (8 MiB) | Multipart threshold and part size for uploads and copies, at least 5 MiB |
-| `s3storage_max_concurrency` | `4` | Parts transferred in parallel per upload or copy |
-| `s3storage_chunk_size` | `1048576` (1 MiB) | Chunk size for downloads, hashing and spooling |
+| `s3storage_part_size` | `8388608` (8 MiB) | Multipart threshold and part size for uploads and copies, 5 MiB to 512 MiB |
+| `s3storage_max_concurrency` | `4` | Parts transferred in parallel per upload or copy, 1 to 16 |
+| `s3storage_chunk_size` | `1048576` (1 MiB) | Chunk size for downloads, hashing and spooling, 4 KiB to 64 MiB |
+
+Values outside the range are clamped to it. Zero, negative or invalid values use the default.
 
 Uploads at or above the part size use multipart upload and copies use multipart copy, so there is no 5 GB
 limit. S3 allows 10,000 parts, so the part size grows automatically for files above about 80 GB. A failed
 multipart upload is aborted, so no incomplete parts are left behind.
+
+A worker that is killed during an upload cannot abort it. Its parts stay in the bucket, invisible but
+billed, until an `AbortIncompleteMultipartUpload` lifecycle rule removes them, so set one up (see
+[bucket-lifecycle.md](bucket-lifecycle.md)). A worker killed after the upload but before the commit leaves a
+complete object without a `File` row, which [`s3storage-verify`](migration.md#verify) reports as an orphan.
 
 Memory per transfer stays bounded: an upload from a path reads the file from disk part by part, an upload from
 a file object holds at most `s3storage_max_concurrency` parts in memory, and a download holds one chunk.
 Downloads support `Range` requests, so browsers, players and download managers can seek and resume.
 
 Every object stores the MD5 of its content as `md5` metadata, also for multipart uploads, whose ETag is not an
-MD5. Verify and migration use it to compare objects with local files.
+MD5. Copies, for example when a file is made private or public, keep it and the `ContentType`. Verify and
+migration use it to compare objects with local files.
 
 Some paths still hold a whole file in memory because Frappe core needs its content as bytes:
 

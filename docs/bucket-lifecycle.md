@@ -6,6 +6,10 @@ bucket versioning: a deleted or overwritten object stays restorable as a noncurr
 A lifecycle rule keeps the bucket from growing forever. The example keeps noncurrent versions for 30 days,
 removes delete markers that no longer hide anything and cleans up abandoned multipart uploads.
 
+Always set `AbortIncompleteMultipartUpload`, also without versioning. Files at or above `s3storage_part_size`
+(8 MiB by default) are uploaded in parts, and a worker that is killed mid-upload leaves its parts behind. They
+do not show up as objects, but they take space and are billed until the rule removes them.
+
 ## Example with the AWS CLI
 
 ```sh

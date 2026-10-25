@@ -18,7 +18,9 @@ MIB = 1024 * 1024
 DEFAULT_CHUNK_SIZE = MIB
 DEFAULT_PART_SIZE = 8 * MIB
 DEFAULT_MAX_CONCURRENCY = 4
-MIN_PART_SIZE = 5 * MIB
+CHUNK_SIZE_RANGE = (4 * 1024, 64 * MIB)
+PART_SIZE_RANGE = (5 * MIB, 512 * MIB)
+MAX_CONCURRENCY_RANGE = (1, 16)
 
 
 class UnsafeFileURL(frappe.ValidationError):
@@ -41,16 +43,24 @@ def bucket():
 	return settings().bucket
 
 
+def bounded_setting(key, default, bounds):
+	value = cint(frappe.conf.get(key))
+	if value <= 0:
+		return default
+	low, high = bounds
+	return min(max(value, low), high)
+
+
 def chunk_size():
-	return cint(frappe.conf.get("s3storage_chunk_size")) or DEFAULT_CHUNK_SIZE
+	return bounded_setting("s3storage_chunk_size", DEFAULT_CHUNK_SIZE, CHUNK_SIZE_RANGE)
 
 
 def part_size():
-	return max(cint(frappe.conf.get("s3storage_part_size")) or DEFAULT_PART_SIZE, MIN_PART_SIZE)
+	return bounded_setting("s3storage_part_size", DEFAULT_PART_SIZE, PART_SIZE_RANGE)
 
 
 def max_concurrency():
-	return max(cint(frappe.conf.get("s3storage_max_concurrency")) or DEFAULT_MAX_CONCURRENCY, 1)
+	return bounded_setting("s3storage_max_concurrency", DEFAULT_MAX_CONCURRENCY, MAX_CONCURRENCY_RANGE)
 
 
 def transfer_config():
@@ -252,7 +262,19 @@ def delete(key):
 
 
 def copy(source_key, target_key):
-	client().copy({"Bucket": bucket(), "Key": source_key}, bucket(), target_key, Config=transfer_config())
+	meta = head(source_key) or {}
+	extra = {
+		"ContentType": meta.get("ContentType") or content_type_for(target_key),
+		"Metadata": meta.get("Metadata") or {},
+		"MetadataDirective": "REPLACE",
+	}
+	client().copy(
+		{"Bucket": bucket(), "Key": source_key},
+		bucket(),
+		target_key,
+		ExtraArgs=extra,
+		Config=transfer_config(),
+	)
 
 
 def matches(meta, size, digest):
@@ -260,6 +282,14 @@ def matches(meta, size, digest):
 		return False
 	stored = (meta.get("Metadata") or {}).get("md5") or meta.get("ETag", "").strip('"')
 	return stored == digest
+
+
+def holds(key, size, digest):
+	"""Check an object against a known size and MD5 without trusting its `md5` metadata."""
+	meta = head(key)
+	if not meta or meta.get("ContentLength") != size:
+		return False
+	return meta.get("ETag", "").strip('"') == digest or stream(key) == (size, digest)
 
 
 def read_file_url(file_url):

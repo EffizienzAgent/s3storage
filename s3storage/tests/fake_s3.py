@@ -85,9 +85,11 @@ class FakeS3:
 
 	def copy(self, CopySource, Bucket, Key, ExtraArgs=None, Config=None):
 		self.calls.append("copy")
-		self.objects[(Bucket, Key)] = dict(
-			self._object(CopySource["Bucket"], CopySource["Key"], missing="404")
-		)
+		obj = dict(self._object(CopySource["Bucket"], CopySource["Key"], missing="404"))
+		extra = ExtraArgs or {}
+		if extra.get("MetadataDirective") == "REPLACE":
+			obj |= {"ContentType": extra.get("ContentType"), "Metadata": dict(extra.get("Metadata") or {})}
+		self.objects[(Bucket, Key)] = obj
 
 	def upload_fileobj(self, Fileobj, Bucket, Key, ExtraArgs=None, Config=None):
 		self.calls.append("upload_fileobj")

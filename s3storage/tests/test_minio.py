@@ -213,7 +213,8 @@ class TestLargeFiles(MinioTestCase):
 		frappe.set_user(user)
 		with patch.object(storage, "get", side_effect=AssertionError("full read")):
 			file = backend.insert_file(f"{self.tag}.zip", self.temp_path(), ignore_permissions=True)
-		self.assertEqual(file.file_url, f"/private/files/{self.tag}.zip")
+		self.assertTrue(file.file_url.startswith(f"/private/files/{self.tag}"))
+		self.assertEqual(file.file_name, f"{self.tag}.zip")
 		self.assertEqual(
 			(file.file_size, file.content_hash, file.is_private), (len(self.content), self.md5, 1)
 		)
@@ -228,7 +229,16 @@ class TestLargeFiles(MinioTestCase):
 			backend.insert_file(
 				f"{self.tag}.zip", io.BytesIO(self.content), attached_to_doctype="NoSuchDocType"
 			)
-		self.assertNotIn(f"private/files/{self.tag}.zip", self.keys())
+		self.assertFalse([key for key in self.keys() if key.startswith(f"private/files/{self.tag}")])
+
+	def test_migration_verifies_multipart_upload_by_content(self):
+		with patch.dict(frappe.local.conf, dict.fromkeys(self.config)):
+			file = backend.insert_file(f"{self.tag}.bin", self.temp_path(), is_private=1)
+		self.addCleanup(os.remove, storage.local_path(file.file_url))
+		with patch.object(storage, "stream", wraps=storage.stream) as stream:
+			self.assertGreaterEqual(migrate.run()["counts"]["uploaded"], 1)
+		stream.assert_any_call(storage.key_for(file.file_url))
+		self.assert_multipart(storage.key_for(file.file_url))
 
 
 class TestRangeRequests(MinioTestCase):

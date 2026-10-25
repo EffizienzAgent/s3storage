@@ -189,11 +189,72 @@ class TestStorage(S3FilesTestCase):
 			file = backend.insert_file(f"{self.tag}.zip", io.BytesIO(b"zip"), is_private=0)
 			with open(file.get_full_path(), "rb") as f:
 				self.assertEqual(f.read(), b"zip")
-			self.assertEqual(
-				(file.file_url, file.content_hash), (f"/files/{self.tag}.zip", storage.md5(b"zip"))
-			)
+			self.assertRegex(file.file_url, rf"^/files/{self.tag}\w+\.zip$")
+			self.assertEqual((file.file_name, file.content_hash), (f"{self.tag}.zip", storage.md5(b"zip")))
 			file.delete()
 		self.assertEqual(self.s3.keys(), [])
+
+	def test_insert_file_never_reuses_a_name(self):
+		first = backend.insert_file(f"{self.tag}.zip", io.BytesIO(b"one"))
+		second = backend.insert_file(f"{self.tag}.zip", io.BytesIO(b"two"))
+		self.assertNotEqual(first.file_url, second.file_url)
+		self.assertNotEqual(first.file_url, f"/private/files/{self.tag}.zip")
+		self.assertEqual((first.file_name, second.file_name), (f"{self.tag}.zip", f"{self.tag}.zip"))
+		self.assertEqual(self.s3.content(storage.key_for(first.file_url)), b"one")
+
+	def test_discard_keeps_an_object_that_a_row_uses(self):
+		file = make_file(f"{self.tag}.txt", self.tag.encode())
+		backend.discard(file.file_url)
+		self.assertIn(storage.key_for(file.file_url), self.s3.keys())
+
+	def test_discard_runs_the_delete_hook(self):
+		key = f"private/files/{self.tag}.zip"
+		self.s3.put_object(Bucket="files", Key=key, Body=b"zip")
+		with (
+			self.patch_hooks({"s3storage_before_object_delete": [f"{__name__}.refuse_object"]}),
+			patch.object(frappe, "log_error"),
+		):
+			backend.discard(storage.url_for(key))
+		self.assertIn(key, self.s3.keys())
+		backend.discard(storage.url_for(key))
+		self.assertNotIn(key, self.s3.keys())
+
+	def test_copy_keeps_metadata_and_content_type(self):
+		storage.put("private/files/a.bin", b"data")
+		self.s3.objects[("files", "private/files/a.bin")]["ContentType"] = "application/zip"
+		with patch.object(self.s3, "copy", wraps=self.s3.copy) as copy:
+			storage.copy("private/files/a.bin", "public/files/a.bin")
+		self.assertEqual(
+			copy.call_args.kwargs["ExtraArgs"],
+			{
+				"ContentType": "application/zip",
+				"Metadata": {"md5": storage.md5(b"data")},
+				"MetadataDirective": "REPLACE",
+			},
+		)
+		self.assertEqual(
+			self.s3.objects[("files", "public/files/a.bin")]["Metadata"]["md5"], storage.md5(b"data")
+		)
+
+	def test_transfer_settings_are_bounded(self):
+		cases = {
+			"s3storage_chunk_size": (
+				storage.chunk_size,
+				{-1: storage.DEFAULT_CHUNK_SIZE, 1: 4096, 10**12: 64 * storage.MIB},
+			),
+			"s3storage_part_size": (
+				storage.part_size,
+				{-1: storage.DEFAULT_PART_SIZE, 1: 5 * storage.MIB, 10**12: 512 * storage.MIB},
+			),
+			"s3storage_max_concurrency": (
+				storage.max_concurrency,
+				{-3: storage.DEFAULT_MAX_CONCURRENCY, 1000: 16},
+			),
+		}
+		for key, (getter, expected) in cases.items():
+			for value, result in expected.items():
+				with patch.dict(frappe.local.conf, {key: value}):
+					self.assertEqual(getter(), result, f"{key}={value}")
 
 	def test_making_private_moves_object(self):
 		file = make_file(f"{self.tag}.txt", self.tag.encode())
@@ -342,6 +403,20 @@ class TestMigration(S3FilesTestCase):
 		result = migrate.run()
 		self.assertNotIn("uploaded", result["counts"])
 		self.assertGreaterEqual(result["counts"]["already_uploaded"], 1)
+
+	def test_upload_is_verified_against_the_local_file(self):
+		with patch.dict(frappe.local.conf, UNSET):
+			file = make_file(f"{self.tag}.txt", self.tag.encode())
+		self.addCleanup(os.remove, file.get_full_path())
+
+		def corrupt(Filename, Bucket, Key, ExtraArgs=None, Config=None):
+			self.s3.put_object(
+				Bucket, Key, b"x" * len(self.tag), ExtraArgs["ContentType"], ExtraArgs["Metadata"]
+			)
+
+		with patch.object(self.s3, "upload_file", side_effect=corrupt):
+			result = migrate.run()
+		self.assertIn(f"verify_failed: {file.file_url}", result["problems"])
 
 	def test_local_file_still_readable_before_migration(self):
 		with patch.dict(frappe.local.conf, UNSET):

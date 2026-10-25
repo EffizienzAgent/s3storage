@@ -31,7 +31,8 @@ The command reads every distinct `file_url` and `thumbnail_url` of all `File` ro
 
 - skips the object if its size and MD5 already match the local file,
 - uploads the local file otherwise,
-- checks the upload with a HEAD request.
+- checks the upload against the local file: a HEAD request compares the size and the ETag, and if the ETag
+  is not the MD5 (multipart uploads, some encryption modes), the object is downloaded and hashed.
 
 ## Output
 
@@ -53,7 +54,7 @@ The command reads every distinct `file_url` and `thumbnail_url` of all `File` ro
 | `in_s3_only` | No local file, but the object exists |
 | `missing` | Neither a local file nor an object |
 | `hash_mismatch` | The local file does not match the `File`'s `content_hash` (it is still uploaded) |
-| `verify_failed` | The HEAD request after upload did not match |
+| `verify_failed` | The object after upload did not match the local file's size and MD5 |
 | `unsafe_url` | The `file_url` is rejected, see [configuration.md](configuration.md#object-keys) |
 | `failed` | Unexpected error, see the Error Log |
 
