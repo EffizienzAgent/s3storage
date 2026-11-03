@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/EffizienzAgent/s3storage/compare/v0.3.2...v0.4.0) (2026-11-03)
+
+
+### Features
+
+* add app icon and apps screen entry ([f8993f2](https://github.com/EffizienzAgent/s3storage/commit/f8993f2e7c522f207b6617ca822811ce1bb6ae53))
+* add app icon and apps screen entry ([95b5454](https://github.com/EffizienzAgent/s3storage/commit/95b5454da67d09ca52d6c6eaa9f975dbdd3b43b7))
+
 ## [0.3.2](https://github.com/EffizienzAgent/s3storage/compare/v0.3.1...v0.3.2) (2026-10-25)
 
 
