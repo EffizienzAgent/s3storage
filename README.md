@@ -1,5 +1,7 @@
 S3-compatible file storage for the Frappe Framework
 
+<img src="docs/images/logo.png" alt="" width="96" align="right">
+
 # s3storage
 
 `s3storage` stores the bytes of Frappe `File` documents in an S3-compatible bucket instead of the site's
